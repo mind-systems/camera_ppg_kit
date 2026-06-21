@@ -6,15 +6,15 @@
 
 It is one pulse source among several the `mind` app integrates (alongside `neiry_kit` and future BLE chest-straps and wearables). Each source ships as its own Flutter-plugin "kit" and is consumed by `mind_mobile` behind a domain contract — the app never talks to a sensor SDK directly. This kit wraps the [`flutter_ppg`](https://pub.dev/packages/flutter_ppg) package (camera-frame signal processing) and the [`camera`](https://pub.dev/packages/camera) plugin behind the same shape `neiry_kit` exposes, so the source drops into `mind_mobile` the same way Neiry did.
 
-The repository also ships an example app to exercise the source end-to-end on real hardware (camera permission, finger presence, signal quality, live RR/BPM) before integration.
+The repository also ships a single example app — a developer-facing playground (not an end-user measurement UX) for whoever integrates the kit. It exposes every kit capability on real hardware: a live inspector of all data streams (RR + artifact flag, derived BPM, signal quality, SNR, finger presence, measurement state, FPS) and a settings panel for every config knob (camera override, torch, warm-up/duration, acceptance-gate params), so the kit can be validated and tuned before wiring into `mind_mobile`.
 
 ## Core Features
 
 - Contact-PPG measurement session over the rear camera + torch, emitting a live stream of RR intervals (ms).
 - Per-measurement signal quality (Good / Fair / Poor), SNR, and finger-presence detection to drive acceptance and UI guidance.
-- Camera selection logic that targets the sensor physically co-located with the flash on multi-camera devices, with honest degradation where a fingertip cannot cover both.
+- Signal-based camera auto-detect: the user covers whichever rear lens + flash is comfortable, and the kit detects which sensor was actually covered (via finger-presence/signal) and uses it. Honest degradation where no single fingertip can cover a lens and the flash together.
 - Idiomatic Dart API hiding `flutter_ppg` / `camera` details, mirroring the `neiry_kit` surface for drop-in consumption.
-- Example app for end-to-end validation on real devices before wiring into `mind_mobile`.
+- Single developer-playground example app (stream inspector + settings) for end-to-end validation and tuning on real devices before wiring into `mind_mobile`.
 
 ## Tech Stack
 

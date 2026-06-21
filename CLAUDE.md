@@ -15,8 +15,8 @@ The repo also contains an **example app** to exercise the source end-to-end (cam
 The heavy lifting (red-channel extraction, bandpass, peak detection, RR-interval emission, signal-quality index) is done by the [`flutter_ppg`](https://pub.dev/packages/flutter_ppg) package, which this kit depends on. The kit exists to **wrap** that package behind the same shape `neiry_kit` exposes, so the source drops into `mind_mobile` the same way Neiry did:
 
 - A small, idiomatic Dart API (`lib/camera_ppg_kit.dart` barrel) that hides `flutter_ppg`/`camera` details.
-- Lifecycle and concerns that `flutter_ppg` explicitly leaves to the host: **which camera to use** (the one physically next to the torch), torch control, warm-up, session duration, acceptance gating, and quality-based artifact handling.
-- Native platform code (`android/`, `ios/`) for anything Dart cannot do — primarily selecting the camera sensor co-located with the flash on multi-camera devices.
+- Lifecycle and concerns that `flutter_ppg` explicitly leaves to the host: **which camera to use** (signal-based auto-detect — the kit detects which sensor the user covered with the flash), torch control, warm-up, session duration, acceptance gating, and quality-based artifact handling.
+- Native platform code (`android/`, `ios/`) is a **deletion candidate**: enumeration is Dart-side (the `camera` plugin's `availableCameras()` lists every rear lens on iOS and one logical back on Android) and torch runs through `setFlashMode(FlashMode.torch)`, so native code ships only as a thin torch fallback if that proves insufficient on some device. Selection logic stays in Dart.
 
 `mind_mobile` adds this kit as `path: ../camera_ppg_kit`, works only with its Dart API, and bridges it into the domain via an adapter in `lib/Biometrics/` (mirroring how `lib/Bci/NeiryBciProvider.dart` adapts `neiry_kit`). The adapter maps the kit's RR stream onto the existing **RR-interval source contract** (`docs/biometrics/active-rr-source.md` in `mind_mobile`), tagged as a `camera_ppg` source so the preferred-with-fallback policy can choose between camera and a worn device.
 
@@ -28,7 +28,7 @@ The heavy lifting (red-channel extraction, bandpass, peak detection, RR-interval
 
 ## Domain constraints that shape the design
 
-- **Camera-near-flash selection is the central hardware problem.** On phones where the torch is far from the active lens, a single fingertip cannot cover both and the signal collapses. The kit must select the sensor co-located with the LED and degrade honestly (quality-gate + user guidance) where it cannot.
+- **Picking the lens that sits under the finger is the central hardware problem.** A fingertip must cover a lens *and* the torch at once, which is only possible where they sit close. The user places a finger over a comfortable lens+flash and presses Start; the kit then runs one round-trip over the rear sensors (torch on, most-likely-covered first) and **locks the first that reads covered** (finger-presence/signal). If none is covered it surfaces a typed error to retry. Cameras can't be opened concurrently, so the round-trip is sequential. Degrade honestly (quality-gate + guidance) where no single fingertip can cover a lens and the flash together.
 - **FPS sensitivity is high.** Heavy animations / frequent `setState` starve the frame stream and corrupt the signal. Measurement should run on a quiet screen, and frame processing should stay off the UI work — favour an isolate for the heavy path. Do not co-locate a live measurement with the breathing-session animation in the host app.
 - **Contact PPG needs a still finger for 30–60 s** for stable intervals. It is unsuitable for motion / on-the-go capture. Treat it as a deliberate "measure now" interaction, not ambient sensing.
 

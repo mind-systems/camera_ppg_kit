@@ -9,7 +9,7 @@ The kit is deliberately not service/controller-centric (there is no server, no H
 ## Decision Rationale
 
 - **Project type:** standalone Flutter plugin ("kit") acting as one biometric source among several
-- **Tech stack:** Dart (plugin) + Kotlin/Swift (native camera-near-flash selection); `flutter_ppg`, `camera`
+- **Tech stack:** Dart (plugin); selection + enumeration are Dart-side via the `camera` plugin, so native Kotlin/Swift is at most a torch fallback (deletion candidate); `flutter_ppg`, `camera`
 - **Key factor:** small surface, single deployment, low domain complexity, but a **hard public boundary** is required so the host never couples to `flutter_ppg`/`camera`/native details. Structured Modules (technical layers) gives that boundary without the overhead of Explicit Architecture, and matches `neiry_kit` for cross-kit consistency.
 
 ## Folder Structure
@@ -30,8 +30,8 @@ camera_ppg_kit/
 │       ├── channel/                         # method/event-channel names + shared enums
 │       ├── processing/                      # acceptance / outlier policy layered on flutter_ppg (cf. neiry's ppg_peak_detector)
 │       └── util/                            # internal logging helper (cf. neiry's nlog.dart)
-├── android/                                 # Kotlin plugin + camera-sensor-near-torch selection
-├── ios/                                     # Swift plugin + camera-sensor-near-torch selection
+├── android/                                 # Kotlin plugin — torch fallback only if needed (deletion candidate)
+├── ios/                                     # Swift plugin — torch fallback only if needed (deletion candidate)
 ├── example/                                 # standalone app — validate end-to-end on real hardware
 └── test/                                    # plugin unit tests
 ```
