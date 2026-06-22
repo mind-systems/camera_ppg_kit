@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../inspector/stream_inspector_screen.dart';
 import 'auto_detect_result.dart';
 import 'camera_probe.dart';
 import 'coverage_detector.dart';
@@ -254,6 +255,21 @@ class _AutoDetectScreenState extends State<AutoDetectScreen> {
             'lensType: ${cam.lensType.name}  '
             'orientation: ${cam.sensorOrientation}°',
             style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          // The auto-detect round-trip has fully torn down the camera before
+          // reaching this point, so the inspector can safely open it fresh.
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => StreamInspectorScreen(camera: cam),
+                ),
+              );
+            },
+            icon: const Icon(Icons.stream),
+            label: const Text('Open stream inspector'),
           ),
         ],
       ),

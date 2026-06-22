@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_ppg/flutter_ppg.dart';
 
+import '../common/finger_presence.dart';
 import 'auto_detect_result.dart';
 import 'camera_probe.dart';
 import 'log.dart';
@@ -29,9 +30,6 @@ Future<CoverageOutcome> detectCoveredCamera(
   Duration dwell = const Duration(milliseconds: 700),
 }) async {
   const cfg = PPGConfig();
-  // Inlined finger-presence check — mirrors SignalQualityAssessor.isFingerPresent.
-  bool covered(double raw) =>
-      raw > cfg.fingerPresenceMin && raw < cfg.fingerPresenceMax;
 
   final records = <CameraProbeRecord>[];
 
@@ -85,7 +83,7 @@ Future<CoverageOutcome> detectCoveredCamera(
         if (elapsed < warmUp) return; // discard torch/exposure-settling frames
         if (elapsed >= warmUp + dwell) return; // dwell window already closed
         framesSeen++;
-        if (covered(signal.rawIntensity)) coveredCount++;
+        if (isFingerPresent(signal.rawIntensity, config: cfg)) coveredCount++;
       });
 
       // ── wait for the full warm-up + dwell window ─────────────────────────
