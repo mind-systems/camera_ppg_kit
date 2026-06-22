@@ -170,8 +170,10 @@ Future<CoverageOutcome> detectCoveredCamera(
 
 /// Tears down all camera resources in the correct order, tolerating nulls.
 ///
-/// Order: stop image stream → cancel signal subscription → dispose service
-/// → close StreamController → set flash off → dispose controller.
+/// Order: stop image stream → close input StreamController → cancel signal
+/// subscription → dispose service → set flash off → dispose controller.
+/// The input controller is closed before the subscription is cancelled to
+/// avoid deadlocking flutter_ppg's `async*` generator (see step 2 below).
 /// Never holds two controllers open at once.
 Future<void> _tearDown({
   required CameraController? controller,
@@ -186,14 +188,22 @@ Future<void> _tearDown({
     } catch (_) {}
   }
 
-  // 2. Cancel the PPG signal subscription.
+  // 2. Close the input bridge BEFORE cancelling the subscription.
+  //
+  // flutter_ppg's processImageStream is an `async*` generator parked on
+  // `await for (image in images)`. Cancelling the subscription while the input
+  // controller is still open deadlocks: the generator is suspended waiting for
+  // either the next frame (the camera is already stopped — none coming) or the
+  // input to close (still open at this point), so it never reaches a point
+  // where the cancel can unwind it. Closing the input ends the await-for, the
+  // generator completes and emits done, and step 3's cancel returns at once.
+  await imageStreamCtrl?.close();
+
+  // 3. Cancel the PPG signal subscription (completes promptly now).
   await sub?.cancel();
 
-  // 3. Dispose the PPG service.
+  // 4. Dispose the PPG service.
   service?.dispose();
-
-  // 4. Close the image stream bridge (no more frames after this).
-  await imageStreamCtrl?.close();
 
   // 5. Turn torch off before disposing the controller.
   if (controller != null && controller.value.isInitialized) {

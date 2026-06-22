@@ -54,7 +54,10 @@ class MeasurementRunner {
   /// Calling [start] twice without an intervening [stop] is a no-op: the guard
   /// prevents the first session from being orphaned with a leaked controller.
   Future<void> start(RearCamera camera) async {
-    if (_signalsCtrl != null) return;
+    if (_signalsCtrl != null) {
+      ppgLog('MeasurementRunner.start ignored — already running');
+      return;
+    }
     _signalsCtrl = StreamController<PPGSignal>.broadcast();
 
     try {
@@ -138,15 +141,13 @@ class MeasurementRunner {
   ///
   /// Teardown order mirrors `coverage_detector.dart`:
   /// 1. stop image stream
-  /// 2. cancel signal subscription
-  /// 3. dispose PPG service
-  /// 4. close image-stream bridge
+  /// 2. close image-stream bridge (before cancel — see step 2 note)
+  /// 3. cancel signal subscription
+  /// 4. dispose PPG service
   /// 5. torch off
   /// 6. dispose camera controller
   /// 7. close signals stream
   Future<void> stop() async {
-    ppgLog('MeasurementRunner stopping');
-
     // Capture and clear all fields atomically so re-entrant calls are no-ops.
     final ctrl = _controller;
     final imgCtrl = _imageStreamCtrl;
@@ -167,14 +168,18 @@ class MeasurementRunner {
       } catch (_) {}
     }
 
-    // 2. Cancel the PPG signal subscription.
+    // 2. Close the input bridge BEFORE cancelling the subscription.
+    // flutter_ppg's processImageStream is an `async*` generator parked on
+    // `await for (image in images)`; cancelling while the input is still open
+    // deadlocks (the generator never reaches a suspension point to unwind).
+    // Closing the input ends the await-for so step 3's cancel returns at once.
+    await imgCtrl?.close();
+
+    // 3. Cancel the PPG signal subscription (completes promptly now).
     await sub?.cancel();
 
-    // 3. Dispose the PPG service.
+    // 4. Dispose the PPG service.
     service?.dispose();
-
-    // 4. Close the image-stream bridge (no more frames after this).
-    await imgCtrl?.close();
 
     // 5. Turn torch off before disposing the controller.
     if (ctrl != null && ctrl.value.isInitialized) {

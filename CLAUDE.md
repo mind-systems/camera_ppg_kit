@@ -70,6 +70,17 @@ flutter pub add <package_name>
 
 This is a standalone plugin and does **not** depend on `mind_mobile`'s logger facade. Keep native/plugin logs minimal and behind a single internal helper (as Neiry does with `lib/src/util/nlog.dart`), so the host app's logging policy is not violated when the kit is embedded.
 
+### Example-app logging style (our development convention)
+
+The example app is a hardware-debugging instrument, not a product UI — so it is logged aggressively and that is deliberate. When working in `example/`, follow these rules:
+
+- **Log every user interaction.** Every button, toggle, retry, and screen-to-screen navigation calls `ppgTap('<label>')` from its handler *before* doing the work. The goal is that the device log alone reconstructs the full sequence of what the tester did, in order — never guess what was pressed.
+- **Log lifecycle milestones, not every await.** Keep the coarse markers that bracket real async work: round-trip start and outcome, per-camera probe start + covered/not-covered result, runner start/stop. These are enough for normal debugging — do not leave a log on every internal await.
+- **Fine-grained step logging is a temporary diagnostic, removed once the bug is fixed.** Camera teardown awaits (`stopImageStream`, `dispose`, stream `close`, torch off) can hang on some devices (notably `camera_android_camerax`). When chasing such a hang, add a `N/total <step>…` log *before* each await so the device log pinpoints the step that never returned — then delete those step logs once the cause is found and fixed (as was done for the close-before-cancel teardown deadlock). Keep only the coarse milestone, not the scaffolding.
+- **One helper.** All example logs go through `ppgLog` / `ppgTap` in `example/lib/auto_detect/log.dart` (name `camera_ppg_example`, millisecond timestamps). Do not use `print` or `debugPrint`.
+
+This verbosity is scoped to the example app. The kit's own `lib/` code keeps logs minimal per the paragraph above.
+
 ## Relationship to the rest of the monorepo
 
 - Lives beside `neiry_kit/` under `/Users/max/projects/mind/` as a **separate git repository**. Run git operations inside this directory, not from the monorepo root.

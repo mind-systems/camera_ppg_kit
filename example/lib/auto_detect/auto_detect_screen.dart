@@ -4,6 +4,7 @@ import '../inspector/stream_inspector_screen.dart';
 import 'auto_detect_result.dart';
 import 'camera_probe.dart';
 import 'coverage_detector.dart';
+import 'log.dart';
 
 /// Developer-facing panel that exercises the signal-based camera auto-detect
 /// spike: enumerates rear cameras, runs the coverage round-trip, and shows
@@ -36,24 +37,32 @@ class _AutoDetectScreenState extends State<AutoDetectScreen> {
   }
 
   Future<void> _enumerate() async {
+    ppgLog('Enumerating rear cameras…');
     setState(() => _enumerating = true);
     try {
       final cams = await enumerateRearCameras();
+      ppgLog('Enumerated ${cams.length} rear camera(s): '
+          '${cams.map((c) => "#${c.index} ${c.name}").join(", ")}');
       if (!mounted) return;
       setState(() {
         _rearCameras = cams;
         _enumerating = false;
       });
-    } catch (e) {
+    } catch (e, st) {
       // availableCameras() throws on simulators/emulators (no camera plugin)
       // and on denied access — leave _rearCameras empty and clear the spinner.
+      ppgLog('Enumerate failed', error: e, stackTrace: st);
       if (!mounted) return;
       setState(() => _enumerating = false);
     }
   }
 
   Future<void> _start() async {
-    if (_rearCameras.isEmpty) return;
+    if (_rearCameras.isEmpty) {
+      ppgLog('Start ignored — no rear cameras enumerated');
+      return;
+    }
+    ppgLog('Coverage round-trip starting over ${_rearCameras.length} camera(s)');
     setState(() {
       _phase = _Phase.probing;
       _outcome = null;
@@ -70,6 +79,11 @@ class _AutoDetectScreenState extends State<AutoDetectScreen> {
       warmUp: const Duration(milliseconds: 400),
       dwell: const Duration(milliseconds: 700),
     );
+
+    ppgLog(outcome.isSuccess
+        ? 'Round-trip done → LOCKED #${outcome.lockedCamera!.index} '
+            '${outcome.lockedCamera!.name}'
+        : 'Round-trip done → FAILED ${outcome.error!.name}');
 
     if (!mounted) return;
     setState(() {
@@ -133,7 +147,12 @@ class _AutoDetectScreenState extends State<AutoDetectScreen> {
               )
             else
               TextButton(
-                onPressed: _phase == _Phase.probing ? null : _enumerate,
+                onPressed: _phase == _Phase.probing
+                    ? null
+                    : () {
+                        ppgTap('Re-probe');
+                        _enumerate();
+                      },
                 child: const Text('Re-probe'),
               ),
           ],
@@ -158,7 +177,12 @@ class _AutoDetectScreenState extends State<AutoDetectScreen> {
   Widget _startButton() {
     final busy = _phase == _Phase.probing;
     return ElevatedButton(
-      onPressed: busy || _rearCameras.isEmpty ? null : _start,
+      onPressed: busy || _rearCameras.isEmpty
+          ? null
+          : () {
+              ppgTap('Start');
+              _start();
+            },
       child: busy
           ? const Row(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -226,7 +250,10 @@ class _AutoDetectScreenState extends State<AutoDetectScreen> {
         // ── retry affordance on failure ───────────────────────────────────
         if (!outcome.isSuccess)
           OutlinedButton(
-            onPressed: _start,
+            onPressed: () {
+              ppgTap('Retry');
+              _start();
+            },
             child: const Text('Retry'),
           ),
       ],
@@ -261,6 +288,7 @@ class _AutoDetectScreenState extends State<AutoDetectScreen> {
           // reaching this point, so the inspector can safely open it fresh.
           ElevatedButton.icon(
             onPressed: () {
+              ppgTap('Open stream inspector → #${cam.index} ${cam.name}');
               Navigator.push(
                 context,
                 MaterialPageRoute(

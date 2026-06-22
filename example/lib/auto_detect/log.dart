@@ -14,3 +14,12 @@ void ppgLog(
   log('[$ts] $message',
       name: 'camera_ppg_example', error: error, stackTrace: stackTrace);
 }
+
+/// Logs a user interaction (button tap, navigation, toggle, retry) in the
+/// example app.
+///
+/// Every interactive control in the example MUST call this from its handler so
+/// the full sequence of user events is visible in the device logs — see the
+/// "Logging" section of this repo's CLAUDE.md. Output is prefixed with `TAP →`
+/// so it can be grepped out of the camera-plugin noise.
+void ppgTap(String label) => ppgLog('TAP → $label');

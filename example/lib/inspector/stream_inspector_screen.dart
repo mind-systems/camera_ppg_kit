@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_ppg/flutter_ppg.dart';
 
 import '../auto_detect/camera_probe.dart';
+import '../auto_detect/log.dart';
 import '../common/finger_presence.dart';
 import 'measurement_runner.dart';
 
@@ -50,6 +51,7 @@ class _StreamInspectorScreenState extends State<StreamInspectorScreen> {
   @override
   void initState() {
     super.initState();
+    ppgLog('Inspector opened on ${widget.camera.name}');
     _startRunner();
   }
 
@@ -80,6 +82,7 @@ class _StreamInspectorScreenState extends State<StreamInspectorScreen> {
 
   @override
   void dispose() {
+    ppgLog('Inspector closing (back) — tearing down runner');
     _uiTimer?.cancel();
     _sub?.cancel();
     _runner.stop();
@@ -135,11 +138,14 @@ class _StreamInspectorScreenState extends State<StreamInspectorScreen> {
         Text('Elapsed: $label',
             style: const TextStyle(fontFamily: 'monospace', fontSize: 14)),
         const SizedBox(width: 12),
-        Text('(hold ~60 s for SQI distribution)',
-            style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 12,
-                color: Colors.grey.shade600)),
+        Expanded(
+          child: Text('(hold ~60 s for SQI distribution)',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: Colors.grey.shade600)),
+        ),
       ],
     );
   }
