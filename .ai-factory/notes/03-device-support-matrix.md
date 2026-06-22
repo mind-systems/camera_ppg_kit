@@ -26,9 +26,26 @@ A matrix (markdown table in `.ai-factory/` or `docs/`) with one row per tested p
 - RR stability vs reference (good / noisy / none)
 - Verdict: **supported / marginal / unsupported**
 
+### Results (provisional — 1 device)
+
+**This matrix is provisional: only one Android device has been tested.** It needs at least an iPhone Pro (multi-lens island, worst flash–lens separation) and a single-camera budget phone before the go/no-go can be made.
+
+| Device / island | Lens+flash, one finger? | Rear cams (`availableCameras`) | Auto-detect | Worst-case detect | Finger-presence | Sustained FPS | RR vs reference | Verdict |
+|---|---|---|---|---|---|---|---|---|
+| Galaxy A70 (SM-A705FN), Android 11 — triple rear island | Y | 1 (logical back; 3 physical sensors collapsed by CameraX) | default-only | ~2 s | Y (covered-fraction 1.00) | ~24, stable | good — steady ~57–60 BPM resting (not yet cross-checked vs a reference monitor) | supported |
+
+**Observations from the A70 run** (90 s static-finger inspector session):
+
+- **SQI reaches `good` within ~2 s and holds** for the whole session; SNR 7.5–13 dB; finger-presence stable throughout.
+- **Frame path holds ~24 FPS, `isFPSStable` true** under the quiet inspector screen — no frame starvation. Confirms the FPS-sensitivity risk is manageable when no heavy animation shares the screen.
+- **Two halving artifacts** (instantaneous BPM spiked to ~110–130, RR ≈ 458–542 ms) where the detector picked a harmonic / dicrotic notch. `flutter_ppg`'s outlier filter caught them (rejection ratio jumped to ~0.78), but the *instantaneous* BPM still misreported. Motivates the Phase-8 RR acceptance gate (note 12): a rolling-median consistency filter rejects a 458 ms interval against a ~1040 ms median.
+- **RR resolution is FPS-quantized.** Intervals land on ~42 ms steps (= 1000/24 ms frame period), so BPM is discrete (53.3 / 55.4 / 57.6 / 60.0 / 62.6…) and fine-grained HRV (SDRR ~30 ms) sits near the quantization floor. BPM/RR is usable; precise HRV from camera PPG at this frame rate is coarse (peak-time interpolation could improve it — open question).
+
 ### Go/no-go statement
 
-**Item #1 — confirm the rear-camera count; Phase 7 is a deletion candidate.** The plugin sources already answer the *capability* (Key Findings): iOS exposes every rear lens, Android exposes one logical back camera. Native enumeration is therefore unnecessary on both platforms — **Phase 7 (notes 10/11) is a deletion candidate**, reduced at most to a thin torch fallback. The spike only confirms the per-device *count* with a ~15-line throwaway probe on real devices (simulator/emulator have no cameras):
+**Decision: GO (2026-06-22).** Validated end-to-end on the Galaxy A70 — auto-detect locks the covered lens, the torch drives a clean signal, SQI holds `good`, the frame path sustains ~24 FPS without starvation, and RR/BPM is physiologically plausible (resting ~57–60 BPM). The spike's question — *does a usable contact-PPG signal exist on real hardware* — is answered yes, so the kit ships and proceeds to implementation (Phases 3–12). The matrix stays provisional: broadening device coverage (iPhone Pro multi-lens island, single-camera budget phone) and deriving any deny-list move into hardening (Phase 11) rather than gating the build. Known limitations to carry forward: occasional peak-halving artifacts (addressed by the Phase-8 acceptance gate) and FPS-quantized RR resolution.
+
+**Item #1 — confirm the rear-camera count; Phase 7 is a deletion candidate.** The plugin sources already answer the *capability* (Key Findings): iOS exposes every rear lens, Android exposes one logical back camera. Native enumeration is therefore unnecessary on both platforms, and the spike confirmed the torch holds through capture via `setFlashMode(FlashMode.torch)` — so the native torch-**fallback** phase is **dropped** (former notes 10/11, removed). The only native concern that survives is *optional torch-brightness control*, deferred behind the roadmap STOP (heat is the motivation; see roadmap Phase 11). The spike only confirms the per-device *count* with a ~15-line throwaway probe on real devices (simulator/emulator have no cameras):
 
 ```dart
 import 'package:camera/camera.dart';

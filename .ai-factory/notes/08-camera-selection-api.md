@@ -1,7 +1,7 @@
 # Camera Auto-Detect + Override API
 
 **Date:** 2026-06-21
-**Source:** conversation context; notes 01 (signal-based auto-detect), 04 (channel contract), 07 (session), 09 (warm-up window)
+**Source:** conversation context; notes 01 (signal-based auto-detect), 07 (session), 09 (warm-up window)
 
 ## Key Findings
 

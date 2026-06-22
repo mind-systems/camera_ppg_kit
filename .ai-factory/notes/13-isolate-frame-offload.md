@@ -5,10 +5,11 @@
 
 ## Key Findings
 
-- **The problem is real and measured.** DESCRIPTION's frame-rate NFR and note 02 both say heavy UI work on the main isolate starves the `CameraImage` stream and drops sustained FPS below the ~24 floor, corrupting the signal. The breath-session animation is the exact co-tenant we must not compete with. The win here is keeping our red-channel reduction **and** `flutter_ppg`'s DSP off the UI isolate.
+- **Defensive, not a prerequisite — confirmed by the spike (note 03).** On the A70 the inspector held ~24 FPS `isFPSStable` for 90 s on the UI isolate with **no** offload, because the screen repaints coarsely (~3 Hz timer, no per-frame `setState`). So the cheap first lever is coarse repaint, and this isolate task is a *defense for the heavy co-tenant case* (the breath-session animation, the exact thing DESCRIPTION warns about) — deferrable until a real screen is shown to starve frames, then this is the fix. Do not treat it as blocking the kit.
+- **The problem is still real where it bites.** DESCRIPTION's frame-rate NFR and note 02 say heavy UI work on the main isolate starves the `CameraImage` stream and drops sustained FPS below the ~24 floor, corrupting the signal. The win here is keeping our red-channel reduction **and** `flutter_ppg`'s DSP off the UI isolate when such a screen exists.
 - **The `camera` plugin already delivers `CameraImage` on a platform thread**, but `startImageStream`'s callback fires on the **root/UI isolate** — so the byte work runs there today. Moving it to a background isolate is the offload.
 - **Two realistic shapes, picked by a blocker that must be confirmed empirically:** (a) run `flutter_ppg` whole inside a long-lived background isolate; (b) if `flutter_ppg` is not isolate-safe, do only the per-frame red-channel reduction in the isolate and feed `flutter_ppg` the reduced 1-D signal on the main isolate.
-- **MUST CONFIRM, do not assert:** whether `FlutterPPGService.processImageStream` is isolate-safe (no platform-channel / `WidgetsBinding` / plugin-registrant calls inside). Read `flutter_ppg` 0.2.4 source or run it under `Isolate.run` in the Phase 2 harness. The choice between (a) and (b) hinges on this — do not invent the answer.
+- **Source read (note 03 spike):** `flutter_ppg` 0.2.4 `processImageStream` is a pure `async*` generator — `await for (image in images) { extractRedChannel(image); … yield PPGSignal(...) }` — with no platform-channel / `WidgetsBinding` / plugin-registrant calls in the loop, so variant (a) (run the whole service in the isolate) is very likely viable. Still **confirm empirically** by running it under a spawned isolate before committing; do not ship on the source read alone.
 
 ## Details
 

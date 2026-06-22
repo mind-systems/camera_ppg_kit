@@ -13,7 +13,7 @@
 
 ### `lib/src/models/measurement_state.dart`
 
-`enum MeasurementState { idle, warmup, measuring, done, poorSignal }` (mirror the channel enum, note 04). This is what `CameraPpgSession.stateStream` emits and what `MeasurementState`-driven UI watches.
+`enum MeasurementState { idle, warmup, measuring, done, poorSignal }` — a pure-Dart enum (there is no native channel; the spike confirmed the kit needs no native code). This is what `CameraPpgSession.stateStream` emits and what `MeasurementState`-driven UI watches.
 
 ### `lib/src/models/finger_presence.dart`
 
