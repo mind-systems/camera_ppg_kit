@@ -1,27 +1,18 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:camera_ppg_kit_example/main.dart';
 
 void main() {
-  testWidgets('Verify Platform version', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('App launches with AutoDetectScreen', (WidgetTester tester) async {
+    await tester.pumpWidget(const CameraPpgKitExampleApp());
 
-    // Verify that platform version is retrieved.
-    expect(
-      find.byWidgetPredicate(
-        (Widget widget) =>
-            widget is Text && widget.data!.startsWith('Running on:'),
-      ),
-      findsOneWidget,
-    );
+    // Guidance text is part of the widget tree and renders synchronously.
+    // The background _enumerate() call may throw MissingPluginException on the
+    // test host (no camera plugin registered) — caught in _enumerate(), so it
+    // does not escape to the test zone.
+    expect(find.textContaining('Place a finger'), findsOneWidget);
+
+    // Drain the pending enumeration microtask so the test zone is clean.
+    await tester.pump();
   });
 }
