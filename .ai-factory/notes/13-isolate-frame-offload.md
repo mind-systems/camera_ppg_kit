@@ -41,6 +41,23 @@ A throwaway harness (`Isolate.spawn`, `TransferableTypedData.fromList` transfer,
 
 **Decision:** proceed with variant (a) for Phase 2 (Tasks 2–4). The throwaway harness (`example/lib/isolate_probe/isolate_probe_harness.dart`, plus the temporary `runIsolateProbe()` call in `example/lib/main.dart`) is deleted now that the verdict is recorded, per this task's scope note — Task 8 builds its own on-device toggle against the real `FrameIsolate`/`SignalMessage` types rather than reusing this scaffolding.
 
+#### Task 8 verdict (2026-07-02, on-device, Samsung SM-A705FN / Android 9, yuv420)
+
+**Mitigation confirmed — SQI held under a real heavy UI-isolate animation; frame-delivery FPS degraded but stayed serviceable.**
+
+A temporary `HeavyLoadProbeScreen` (`example/lib/isolate_probe/heavy_load_probe_screen.dart`, booted as the app's `home` via a temporary `main.dart` toggle) drove the real, isolate-backed `CameraPpgSession` (public barrel type — the closest available stand-in for the not-yet-built Kit-API tab) through two 10 s phases, sampled every 250 ms, with a 3 s warm-up settle in between:
+
+- **Heavy animation:** a `Ticker`-driven (real engine frame clock, not a plain `Timer`) per-tick `List<int>.generate(20000)..sort()` **plus** a 150-widget `Text` rebuild each tick while active — genuine UI-isolate CPU *and* layout/paint competition, reproducing the pre-isolate collapse scenario (not an offscreen spin).
+- **Metric reachability:** `SignalMessage`/`CameraPpgSession` were temporarily widened with `frameRate`/`isFPSStable`/`debugLastFrameRate`/`debugLastFpsStable` (flutter_ppg's internal FPS detector, mirrored through the isolate) to make the numbers observable; **all of this was reverted immediately after this run** — the frozen boundary (`SignalMessage`'s five fields, `_onSignal`'s contract) is unchanged in the committed code.
+- **Baseline (animation OFF, 39 samples):** `avgFrameRate=30.00`, `fpsStable=39/39` (100%), quality tally `{good: 39}` (100% good).
+- **Loaded (animation ON, 36 samples):** `avgFrameRate=20.22`, `fpsStable=13/36` (36%), quality tally `{poor: 1, good: 35}` (97% good).
+
+**Reading the result honestly, per this task's framing:** SQI held almost entirely `good` (35/36) even under sustained heavy UI-isolate load — the isolate offload keeps `flutter_ppg`'s DSP off the UI isolate, so it isn't starved by the animation's CPU work, and the quality/acceptance pipeline stays robust even as delivery gets uneven. But average FPS *did* drop (30.0 → 20.22) and `isFPSStable` flipped false more often (100% → 36%) — confirming the plan's caveat that this is a **mitigation, not immunity**: `startImageStream`'s callback still fires on the root/UI isolate (frame *delivery* isn't moved off it, only frame *processing*), so a sufficiently heavy co-tenant animation can still measurably slow delivery even though it can no longer corrupt SQI the way the pre-isolate path could. The loaded FPS (20.22) is below the note-02/03 baseline (~24 FPS held with **no** offload under a *coarse-repaint* screen) — expected, since this harness's animation is deliberately far heavier (per-tick sort + widget rebuild) than the ~3 Hz timer that baseline was measured against; the two numbers aren't measuring the same load.
+
+**Not yet exercised:** the definitive end-to-end proof through the example's Kit-API tab (Phase 7, not yet built) — this on-device run is the interim validation the plan calls for, using `CameraPpgSession` directly rather than a dedicated tab UI.
+
+The temporary widening and the `HeavyLoadProbeScreen`/`main.dart` toggle are fully reverted in the committed code — `SignalMessage`, `frame_isolate.dart`, and `camera_ppg_session.dart` carry no trace of this task's instrumentation.
+
 ### Guards
 
 - One long-lived isolate per measurement; tear it down in `stop()`/`dispose()` (Phase 11 lifecycle) — a leaked isolate keeps the torch path warm and drains battery.
