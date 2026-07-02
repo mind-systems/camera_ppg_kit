@@ -40,7 +40,7 @@ camera_ppg_kit/
 
 - ✅ `camera_ppg_kit.dart` (barrel) → re-exports from `lib/src/` only.
 - ✅ `src/api/` → depends on `src/models/`, `src/channel/`, `src/processing/`, `src/util/`, and on `flutter_ppg` / `camera`.
-- ✅ `src/processing/` → depends on `src/models/` only (pure Dart signal/acceptance logic; no `camera`/channel imports).
+- ✅ `src/processing/` → depends on `src/models/` only (pure Dart signal/acceptance logic; no `camera`/channel imports). **Deliberate sole exception:** `src/processing/frame_isolate.dart` imports `camera` + `flutter_ppg` — it is the isolate-boundary host (spawns the long-lived background isolate, runs `FlutterPPGService` inside it, adapts `CameraImage` <-> the sendable `FrameMessage`/`SignalMessage` types in `frame_message.dart`), not general signal/acceptance logic. `frame_message.dart` itself stays pure (`dart:typed_data` + `dart:isolate` only). The `CameraController` wiring stays in `src/api/` per spec note 13.
 - ✅ `src/models/` → pure value types; depend on nothing else in the kit.
 - ✅ Native (`android/`, `ios/`) → communicate with Dart **only** through the names declared in `src/channel/`.
 - ❌ Consumers (incl. `mind_mobile`) importing anything under `lib/src/` directly — they use the barrel only.
