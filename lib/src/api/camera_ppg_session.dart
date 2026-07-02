@@ -307,7 +307,19 @@ class CameraPpgSession {
         // `imageStreamCtrl` bridge used elsewhere in this file).
         final fi = frameIsolate;
         controller.startImageStream((img) {
-          fi.sink(frameMessageFromCameraImage(img));
+          // frameMessageFromCameraImage reads planes[2] for yuv420; a
+          // nonconformant frame layout (not observed on tested hardware,
+          // but not guaranteed by the platform) would otherwise throw
+          // uncaught inside this raw camera-plugin callback. Previously
+          // flutter_ppg's own `try { extractRedChannel } catch { continue }`
+          // absorbed malformed frames — restore that same drop-and-continue
+          // posture here now that plane extraction runs before the isolate
+          // boundary (review round-2 Finding 2).
+          try {
+            fi.sink(frameMessageFromCameraImage(img));
+          } catch (e) {
+            nlog('dropping malformed camera frame: $e');
+          }
         });
 
         sub = frameIsolate.signals.listen(

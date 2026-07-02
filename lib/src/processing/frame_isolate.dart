@@ -164,25 +164,36 @@ class FrameIsolate {
       }
     });
 
-    final isolate = await Isolate.spawn(
-      _frameIsolateEntrypoint,
-      fromIsolate.sendPort,
-      debugName: 'camera_ppg_kit-frame-isolate',
-    );
+    Isolate? isolate;
+    try {
+      isolate = await Isolate.spawn(
+        _frameIsolateEntrypoint,
+        fromIsolate.sendPort,
+        debugName: 'camera_ppg_kit-frame-isolate',
+      );
 
-    final toIsolate = await handshake.future.timeout(
-      const Duration(seconds: 5),
-      onTimeout: () => throw StateError('frame isolate handshake timed out'),
-    );
+      final toIsolate = await handshake.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw StateError('frame isolate handshake timed out'),
+      );
 
-    nlog('frame isolate spawned + handshake complete');
-    return FrameIsolate._(
-      isolate,
-      toIsolate,
-      fromIsolate,
-      signalsController,
-      stopAck,
-    );
+      nlog('frame isolate spawned + handshake complete');
+      return FrameIsolate._(
+        isolate,
+        toIsolate,
+        fromIsolate,
+        signalsController,
+        stopAck,
+      );
+    } catch (e) {
+      // Spawn or handshake failed — reclaim whatever was already opened so a
+      // wedged/slow spawn (or handshake timeout) can't strand a zombie
+      // isolate + open port (review round-2 Finding 1).
+      isolate?.kill(priority: Isolate.immediate);
+      fromIsolate.close();
+      await signalsController.close();
+      rethrow;
+    }
   }
 
   /// Feeds one frame into the isolate. Fire-and-forget, mirroring today's
