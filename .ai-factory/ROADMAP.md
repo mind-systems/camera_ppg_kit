@@ -22,7 +22,7 @@
 ## Phase 3 — Dart models
 
 - [x] **Data value types** — add `lib/src/models/rr_interval.dart` (`RrInterval { int intervalMs; DateTime timestamp; bool isArtifact }`, shape-identical to neiry's `RRInterval` so both sources feed one host contract) and `lib/src/models/signal_quality.dart` (`SignalQuality` good/fair/poor + `fromSnr` factory). No BPM/HRV fields — the consumer derives those. Export from the barrel; unit-test `fromSnr` thresholds. Spec: `.ai-factory/notes/05-data-value-types.md`. [13m 41s]
-- [ ] **State & error types** — add `MeasurementState` (idle/warmup/measuring/done/poorSignal), `FingerPresence` (present/absent/over-bright), and a typed, never-thrown `CameraPpgError` (permission-denied / no-finger / unsupported-device / torch-unavailable). Pure Dart, crossed as values not exceptions. Export + tests. Spec: `.ai-factory/notes/06-state-error-types.md`.
+- [x] **State & error types** — add `MeasurementState` (idle/warmup/measuring/done/poorSignal), `FingerPresence` (present/absent/over-bright), and a typed, never-thrown `CameraPpgError` (permission-denied / no-finger / unsupported-device / torch-unavailable). Pure Dart, crossed as values not exceptions. Export + tests. Spec: `.ai-factory/notes/06-state-error-types.md`. [28m 53s]
 
 ## Phase 4 — Dart API
 
