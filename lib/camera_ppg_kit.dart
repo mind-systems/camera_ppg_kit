@@ -2,6 +2,7 @@
 import 'camera_ppg_kit_platform_interface.dart';
 
 export 'src/api/camera_ppg_session.dart';
+export 'src/models/camera_ppg_camera_info.dart';
 export 'src/models/rr_interval.dart';
 export 'src/models/signal_quality.dart';
 export 'src/models/measurement_state.dart';

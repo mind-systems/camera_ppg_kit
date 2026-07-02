@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:camera/camera.dart';
+import 'package:camera/camera.dart' as cam show availableCameras;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_ppg/flutter_ppg.dart' hide SignalQuality;
 
+import '../models/camera_ppg_camera_info.dart';
 import '../models/camera_ppg_error.dart';
 import '../models/finger_presence.dart';
 import '../models/measurement_state.dart';
@@ -63,6 +65,12 @@ class CameraPpgSession {
   /// Set once [dispose] has run; guards against reuse after disposal.
   bool _disposed = false;
 
+  /// Manual-override pin set via [useCamera]. `null` means auto-detect (the
+  /// default): [start] runs the signal-based coverage round-trip. Non-null
+  /// means the next [start] resolves this id against the enumerated rear
+  /// cameras and locks it directly, skipping the round-trip entirely.
+  String? _pinnedCameraId;
+
   /// Bumped by every [_release] call. [start] captures the value in force
   /// when it begins and re-checks it after each `await` during camera
   /// setup; a mismatch means a concurrent [stop]/[dispose] ran while
@@ -98,6 +106,28 @@ class CameraPpgSession {
   /// **absent from the consumer contract** (see note 19's freeze). It stays
   /// `List<double>` only; no `flutter_ppg`/`camera` type ever crosses it.
   Stream<List<double>> get debugSignalStream => _debugSignalController.stream;
+
+  /// Pins the next [start] to the rear camera identified by [id] (one of the
+  /// ids returned by [availableCameras]), skipping the signal-based
+  /// auto-detect round-trip entirely.
+  ///
+  /// Must be called before [start] — it only records the pin; [start] reads
+  /// it. There is no mid-stream hot-swap. Calling this again replaces the
+  /// previous pin. There is no un-pin API; auto-detect is the default and
+  /// this milestone doesn't need one.
+  ///
+  /// Throws [StateError] if called while a measurement is already in
+  /// flight. This is keyed on [_running] rather than `_state ==
+  /// MeasurementState.measuring` deliberately: [_running] is set at the very
+  /// top of [start] for the whole auto-detect round-trip, before state
+  /// reaches [MeasurementState.measuring], so this also correctly rejects
+  /// [useCamera] during that pre-`measuring` setup window.
+  void useCamera(String id) {
+    if (_running) {
+      throw StateError('useCamera() cannot be called while a measurement is running');
+    }
+    _pinnedCameraId = id;
+  }
 
   /// Runs the signal-based auto-detect round-trip over the rear sensors,
   /// locks the first one a finger is detected on, and starts streaming RR
@@ -145,17 +175,34 @@ class CameraPpgSession {
         );
       }
 
-      final lockResult = await _lockCoveredCamera(cameras);
-      if (stale()) {
-        nlog('start(): abandoned — stop()/dispose() ran during the coverage probe');
-        return null;
+      final CameraDescription description;
+      final pinnedCameraId = _pinnedCameraId;
+      if (pinnedCameraId != null) {
+        // Manual override (see [useCamera]): skip the coverage round-trip
+        // entirely and lock the pinned sensor directly. No `await` happens
+        // between the `stale()` check above and here, so the generation
+        // discipline stays intact without an extra check.
+        final pinned = _resolvePinnedCamera(cameras, pinnedCameraId);
+        if (pinned == null) {
+          nlog('start(): pinned camera not found — $pinnedCameraId');
+          return CameraPpgError.cameraUnavailable(
+            message: 'pinned camera not found: $pinnedCameraId',
+          );
+        }
+        description = pinned;
+        nlog('start(): using pinned camera ${description.name}, skipping auto-detect round-trip');
+      } else {
+        final lockResult = await _lockCoveredCamera(cameras);
+        if (stale()) {
+          nlog('start(): abandoned — stop()/dispose() ran during the coverage probe');
+          return null;
+        }
+        if (lockResult.error != null) {
+          nlog('start(): no covered sensor — ${lockResult.error!.type}');
+          return lockResult.error;
+        }
+        description = lockResult.camera!;
       }
-      if (lockResult.error != null) {
-        nlog('start(): no covered sensor — ${lockResult.error!.type}');
-        return lockResult.error;
-      }
-
-      final description = lockResult.camera!;
 
       // Built up locally and only promoted to the instance fields once
       // fully wired (see below). If [stale] flips true partway through,
@@ -426,8 +473,57 @@ class CameraPpgSession {
   /// Android). [CameraDescription.lensType] is frequently `unknown`, so
   /// lenses are probed in enumeration order rather than ranked by type.
   Future<List<CameraDescription>> _enumerateRearCameras() async {
-    final all = await availableCameras();
+    final all = await cam.availableCameras();
     return all.where((c) => c.lensDirection == CameraLensDirection.back).toList();
+  }
+
+  /// Descriptive list of every selectable rear-facing camera, for
+  /// diagnostics and manual override via [useCamera].
+  ///
+  /// Read-only — this never opens a controller or touches the torch, unlike
+  /// the coverage round-trip in [_lockCoveredCamera]. Android yields one
+  /// logical back entry; iOS yields one per rear lens. The metadata on each
+  /// [CameraPpgCameraInfo] is descriptive only (see that type's doc) and
+  /// must never be used to select a sensor — normal operation is the
+  /// signal-based auto-detect round-trip in [start].
+  ///
+  /// Never throws: the underlying `camera` plugin's `availableCameras()` can
+  /// throw a `CameraException` on a platform-side enumeration failure, but
+  /// this method keeps the kit's "no exceptions across the boundary"
+  /// discipline (matching every other public entry point) by catching it
+  /// and returning an empty list instead — "enumeration failed" and "no
+  /// rear cameras" both surface the same way to a diagnostics/override
+  /// list, which has no error-value channel of its own.
+  Future<List<CameraPpgCameraInfo>> availableCameras() async {
+    List<CameraDescription> cameras;
+    try {
+      cameras = await _enumerateRearCameras();
+    } on CameraException catch (e) {
+      nlog('availableCameras(): enumeration failed — ${e.code} ${e.description}');
+      return const [];
+    }
+    return cameras
+        .map((d) => CameraPpgCameraInfo(
+              id: d.name,
+              lensType: d.lensType.name,
+              flashAvailable: true,
+            ))
+        .toList();
+  }
+
+  /// Pure lookup resolving a [useCamera]-pinned id against the enumerated
+  /// rear [cameras] by [CameraDescription.name]. Returns `null` when no
+  /// entry matches — [start] maps that to a typed
+  /// [CameraPpgError.cameraUnavailable] rather than silently falling back
+  /// to auto-detect.
+  CameraDescription? _resolvePinnedCamera(
+    List<CameraDescription> cameras,
+    String id,
+  ) {
+    for (final c in cameras) {
+      if (c.name == id) return c;
+    }
+    return null;
   }
 
   /// Runs the sequential coverage round-trip over [cameras] and returns the

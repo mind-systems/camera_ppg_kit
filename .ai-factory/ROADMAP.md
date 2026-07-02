@@ -27,7 +27,7 @@
 ## Phase 4 — Dart API
 
 - [x] **CameraPpgSession + streams** — the public surface (`lib/src/api/camera_ppg_session.dart`): `start()`/`stop()`, broadcast `rrStream`/`qualityStream`/`stateStream`. Owns a `CameraController` (`ResolutionPreset.low`, bgra8888/yuv420, torch via `setFlashMode` — no native) feeding `flutter_ppg` through a `StreamController<CameraImage>` bridge; converts `PPGSignal`→kit models at the edge so no `flutter_ppg`/`camera` type crosses the barrel. Teardown closes the input bridge before cancelling the subscription (the async* deadlock). Spec: `.ai-factory/notes/07-camera-ppg-session.md`. [49m 13s]
-- [ ] **Camera auto-detect + override API** — `start()` runs the signal-based round-trip by default (lock first covered sensor, else a typed `CameraPpgError`); add `availableCameras()` (descriptive rear list) + `useCamera(id)` to pin one and skip auto-detect. Android exposes one logical back, iOS every lens — same code, different breadth. Spec: `.ai-factory/notes/08-camera-selection-api.md`.
+- [x] **Camera auto-detect + override API** — `start()` runs the signal-based round-trip by default (lock first covered sensor, else a typed `CameraPpgError`); add `availableCameras()` (descriptive rear list) + `useCamera(id)` to pin one and skip auto-detect. Android exposes one logical back, iOS every lens — same code, different breadth. Spec: `.ai-factory/notes/08-camera-selection-api.md`. [22m 12s]
 
 ## Phase 5 — Session policy
 
