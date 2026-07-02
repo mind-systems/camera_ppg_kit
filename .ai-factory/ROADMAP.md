@@ -35,7 +35,7 @@
 
 ## Phase 6 — Signal processing
 
-- [ ] **RR acceptance gate (port from neiry)** — `lib/src/processing/rr_acceptance.dart`: layer neiry's `_gate()` on top of flutter_ppg's intervals — hard 300 ms floor, no upper bound, rolling-median consistency (>40% deviation → artifact), 3-beat cold-start grace; sets `RrInterval.isArtifact`. The spike showed peak-halving leaks past flutter_ppg's own outlier filter (RR ~458 ms vs ~1040 ms median), which this catches. Pure Dart, unit-tested. Spec: `.ai-factory/notes/12-rr-acceptance-gate.md`.
+- [x] **RR acceptance gate (port from neiry)** — `lib/src/processing/rr_acceptance.dart`: layer neiry's `_gate()` on top of flutter_ppg's intervals — hard 300 ms floor, no upper bound, rolling-median consistency (>40% deviation → artifact), 3-beat cold-start grace; sets `RrInterval.isArtifact`. The spike showed peak-halving leaks past flutter_ppg's own outlier filter (RR ~458 ms vs ~1040 ms median), which this catches. Pure Dart, unit-tested. Spec: `.ai-factory/notes/12-rr-acceptance-gate.md`. [8m 39s]
 - [ ] **Isolate offload for the frame path (defensive)** — move `flutter_ppg` frame processing off the UI isolate so a heavy co-tenant screen (breath animation) can't starve frames. Lower priority: the spike held ~24 FPS with no isolate on a coarse-repaint screen, so this defends the heavy case, not the kit's baseline. `flutter_ppg` is a pure `async*` generator (likely isolate-safe — confirm empirically). Spec: `.ai-factory/notes/13-isolate-frame-offload.md`.
 
 ## Phase 7 — Example app (developer playground)

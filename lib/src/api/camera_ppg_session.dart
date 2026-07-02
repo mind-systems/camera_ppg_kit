@@ -11,6 +11,7 @@ import '../models/finger_presence.dart';
 import '../models/measurement_state.dart';
 import '../models/rr_interval.dart';
 import '../models/signal_quality.dart';
+import '../processing/rr_acceptance.dart';
 import '../processing/session_policy.dart';
 import '../util/nlog.dart';
 import 'rr_diff.dart';
@@ -44,14 +45,15 @@ const Duration _probeDwell = Duration(milliseconds: 700);
 /// open, fed on start" pattern, so consumers can subscribe once and keep
 /// listening across measurements.
 class CameraPpgSession {
-  CameraPpgSession({SessionPolicy? policy})
+  CameraPpgSession({SessionPolicy? policy, RrAcceptance? acceptance})
       : _rrController = StreamController<RrInterval>.broadcast(),
         _qualityController = StreamController<SignalQuality>.broadcast(),
         _stateController = StreamController<MeasurementState>.broadcast(),
         _debugSignalController = StreamController<List<double>>.broadcast(),
         _fingerPresenceController =
             StreamController<FingerPresence>.broadcast(),
-        _policy = policy ?? SessionPolicy();
+        _policy = policy ?? SessionPolicy(),
+        _acceptance = acceptance ?? RrAcceptance();
 
   final StreamController<RrInterval> _rrController;
   final StreamController<SignalQuality> _qualityController;
@@ -64,6 +66,13 @@ class CameraPpgSession {
   /// settings playground can pass a tuned instance; defaults to a fresh
   /// [SessionPolicy] otherwise.
   final SessionPolicy _policy;
+
+  /// Per-beat physiological acceptance gate (spec note 12) that flags
+  /// [RrInterval.isArtifact] before beats reach consumers. Constructor-
+  /// injectable, mirroring [_policy], so the example's live-tuning
+  /// playground and tests can pass a tuned instance; defaults to a fresh
+  /// [RrAcceptance] otherwise.
+  final RrAcceptance _acceptance;
 
   /// Monotonic elapsed-time source for [_policy] — reset and started when a
   /// sensor locks, stopped on [_release]. The policy itself stays pure and
@@ -399,6 +408,7 @@ class CameraPpgSession {
     // see [_generation]'s doc (review Finding 1).
     _generation++;
     _stopwatch.stop();
+    _acceptance.reset();
 
     await _tearDownHandles(
       controller: controller,
@@ -463,9 +473,9 @@ class CameraPpgSession {
     // unconditionally, every tick, regardless of trust state (see the RR
     // gating note below). PPGSignal.rrIntervals is recomputed from scratch
     // every frame from a sliding window, not an append-only log — this
-    // diffs out only the newly-produced interval(s). Minimal passthrough;
-    // real dedup + artifact detection lands in the Phase-6 acceptance gate
-    // (note 12).
+    // diffs out only the newly-produced interval(s). Artifact detection
+    // itself happens per-beat in the RR-gating block below via
+    // [_acceptance] (note 12).
     final newIntervals = diffNewIntervals(_lastRrIntervals, signal.rrIntervals);
     _lastRrIntervals = signal.rrIntervals;
 
@@ -499,11 +509,16 @@ class CameraPpgSession {
         // for this passthrough, but it diverges from RrInterval.timestamp's
         // "later peak" contract. PPGSignal.peakIndices is available for
         // precise per-peak timing if a later phase wants it.
-        _rrController.add(RrInterval(
+        //
+        // Every trusted interval is fed through [_acceptance], artifact or
+        // not — its own history-append logic already skips artifacts, so
+        // there is no need to pre-filter here.
+        final candidate = RrInterval(
           intervalMs: rr.round(),
           timestamp: signal.timestamp,
           isArtifact: false,
-        ));
+        );
+        _rrController.add(_acceptance.evaluate(candidate));
       }
     }
 
