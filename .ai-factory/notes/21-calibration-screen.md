@@ -1,52 +1,55 @@
-# Example — Calibration Screen (3rd Tab)
+# Example — Calibration Screen (Pure Consumer, 60s Countdown)
 
-**Date:** 2026-07-02
-**Source:** ROADMAP `---STOP---` calibration handoff (#1); note 20 (capture + export); note 14 (tabbed shell, Kit-API tab); note 16 (`CameraPpgService`); `example/lib/main.dart` (`_TabShell`)
+**Date:** 2026-07-03
+**Source:** ROADMAP Phase 7 re-decomposition — **supersedes the prior auto-stop/camera-lifecycle design of this note**; note 22 (source shell), note 20 (`CalibrationRecorder`), note 16 (`CameraPpgService`), note 09 (why `MeasurementState.done` is unreachable), calibration handoff #1
 
 ## Key Findings
 
-- The calibration loop is deliberately dead-simple: **Start → the tester counts their own pulse for a fixed one-minute run → the run auto-stops at 60 s → enter the count → Save → I pull the file (note 20) and compare.** The screen exists to make counting easy (a big, quiet elapsed timer + live BPM to sanity-check against) and to trigger the note-20 export.
-- **Auto-stop is a screen-owned wall-clock timer, not the kit's `MeasurementState.done`.** The kit's `SessionPolicy.targetDuration` accrues only *measuring* time — it excludes the 5 s warm-up and pauses during `poorSignal` (note 09), so `done` lands well past 60 s of wall clock and drifts run-to-run. Calibration needs the **counting window and the capture window to be the same wall-clock interval** so the manual mean-BPM and the kit mean-BPM cover the same seconds. So the screen fires its own `stop()` at exactly `kCalibrationRunDuration` (60 s from Start); the policy `done` transition is never reached in a normal run (the wall-clock stop always precedes it) and is not relied on for stopping.
-- It gets its **own tab**, not a mode inside the Kit-API tab — a calibration session wants a stripped, distraction-free surface (an animated/busy screen starves FPS, note 03), and keeping it separate keeps the Kit-API dogfood tab unchanged.
-- It reuses the **same `CameraPpgService`** (note 16) as the Kit-API tab: auto-detect, kit defaults, the same streams. No new session plumbing — it drives `startMeasurement()`/`stopMeasurement()` and feeds note 20's recorder from the existing providers.
-- Running the **kit defaults** is the point: we are measuring what today's defaults produce so we can retune them. The recorder stamps the effective params into every file (note 20), so each run is self-describing even as defaults change between rebuilds.
+- The calibration screen is a **pure consumer** of the already-flowing RR stream. The source is owned by the service and started on the **Source screen** (note 22); this screen owns **no** camera, warm-up, or session lifecycle. This reframe is the fix: every bug in the prior design came from the screen owning the measurement lifecycle (setState-after-dispose, timers armed on failed lock, tab-leave partial runs, stale-`stateProvider` Start gate).
+- The **60 s is only a recording window** — data to teach the algorithm not to count the dicrotic notch (systole) as a beat — **not** a session limit. The kit's measurement session is open-ended (RR streams as long as the source runs).
+- The window is bounded by a **screen-owned countdown** (`1:00 → 0:00`), independent of the kit's `SessionPolicy`/`MeasurementState`. The committed `CalibrationRecorder` (note 20) records the window via `start`/`stop`/`save`; its `done`-finalize path stays **dormant** (an open-ended session never reaches `MeasurementState.done`, note 09).
+- The all-mounted shell (note 22) means a mid-recording navigation to another **kit-side** screen no longer kills anything — the screen stays mounted, the source keeps streaming, the recorder keeps buffering. The elaborate tab-leave-abort machinery of the prior design is simply **gone**.
 
 ## Details
 
-### Tab shell — `example/lib/main.dart`
+### Precondition — the source must already be running
 
-Extend `_TabShell` from two tabs to three: **Raw**, **Kit API**, **Calibration**.
+Started on the Source screen (note 22). At **record start**, check `ref.read(cameraPpgServiceProvider).isMeasuring` (`camera_ppg_service.dart:72` — authoritative service state, unlike `stateProvider` which can read stale after an external stop). If not measuring, show guidance ("Start measurement on the Source screen first") and do **not** begin recording — this is what prevents an empty/degenerate file.
 
-- `TabController(length: 2 → 3)`; add a `Tab(text: 'Calib')` and the `CalibrationScreen()` to the `TabBarView`.
-- **Generalize the camera-release-on-leave rule.** Today `_onTabChanged` releases the service camera only when leaving the Kit-API tab (`_kitApiTabIndex == 1`). The Calibration tab (index 2) drives the **same** `CameraPpgService`, so the rear camera + torch (which cannot be opened concurrently, note 01) must be released when leaving **either** service-owning tab, including a Kit-API ⇆ Calibration switch. Replace the single-index check with "previous index was a service-owning tab (1 or 2) and the selection changed" → `stopMeasurement()`. The Raw tab (0) still manages its own `CameraController` teardown as before. The same not-awaited-listener caveat and accepted residual race documented at `_onTabChanged` carry over unchanged.
+### Recording flow (`example/lib/screens/calibration_screen.dart`, new)
 
-### Screen — `example/lib/calibration/calibration_screen.dart`
+- **Start recording** — `ppgTap('calib_record_start')`; verify `isMeasuring` (above); start a `Timer(const Duration(seconds: 60), _finish)` **and** a 1 Hz `Timer.periodic` driving the countdown display; read the **actual in-force config** from the shared `sessionConfigProvider` (note 22 — the `RrAcceptance`/`SessionPolicy` the Source screen's knobs last applied) and call `_recorder.start(service, config.acceptance, config.policy)` to begin buffering. Recording the *actual* config (not fresh defaults) is what keeps the JSON honest when the `[debug]` knobs are tuned. Set screen-local `_recording = true`.
+- **`_finish()`** (shared by the 60 s timer and the optional manual Stop) — cancel + null both timers, `_recorder.stop()`, `_recording = false`, `_recorded = true` (enables Save). `ppgLog` a coarse "calib recording complete" milestone. Idempotent (guard so the manual Stop racing the auto-timer finalizes once).
+- **Manual Stop** (optional, before 0:00) — routes through `_finish()`; the window is then shorter than 60 s and `countWindowSeconds` written at Save reflects the **actual** elapsed seconds, not a fixed 60.
 
-A `ConsumerStatefulWidget` reading the existing providers (`stateProvider`, `bpmProvider`, `qualityProvider`, note 14's `stream_providers.dart`) — no `StreamBuilder`, no per-widget `.listen()` on the service (subscriptions live in providers / the recorder, per neiry's stream-ownership lesson).
+### Save
 
-Layout — kept visually quiet on purpose (no charts, no animation):
+- Counted-beats input — one optional numeric `TextField`.
+- **Save** — `ppgTap('calib_save')`; `final path = await _recorder.save(countedBeats: beats, countWindowSeconds: <actual elapsed seconds>);` then `if (!mounted) return;` guard, show `path` as `SelectableText` + `ppgLog` it. Enabled only when `_recorded`.
 
-- **Start / Stop** — on Start: request camera permission (reuse note 15's `_checkAndRequestCameraPermission()` pattern), then call `CameraPpgService.startMeasurement()` **and** `CalibrationRecorder.start(RrAcceptance(), SessionPolicy())` together (defaults; pass `cameraId` only if a manual override is ever added — not required for v1), and arm the auto-stop timer (below). A single shared `_stop()` path — `stopMeasurement()` + `recorder.stop()` + cancel timers — is invoked by **both** the manual Stop button and the auto-stop timer, so the two finalize identically.
-- **Auto-stop timer** — `const kCalibrationRunDuration = Duration(seconds: 60);` A `Timer(kCalibrationRunDuration, _stop)` armed on Start and cancelled on manual Stop / dispose / tab-leave. When it fires, the run finalizes exactly as a manual Stop would (torch off via the kit's ordered release), and the recorder's buffer covers the same 60 s the tester counted. Exposed as a named constant for now (change one line to run 30 s / 90 s trials); a UI field can come later if needed.
-- **Elapsed timer** (large) — seconds since Start shown against the target, e.g. `0:23 / 1:00`, so the tester watches it approach one minute and knows when to stop counting. Drive it off a local `Timer.periodic(1s)` — coarse 1 Hz, cheap; do not rebuild on every RR tick. (A `1:00 → 0:00` countdown is an acceptable alternative display; the auto-stop is the timer above regardless.)
-- **Live BPM** (large, display-only) — from `bpmProvider`, purely a during-run sanity check for the tester ("am I counting the same ballpark?"). Not the reference.
-- **State + SQI** — small `MeasurementState` label and SQI chip so the tester knows warm-up is done and the signal held (`measuring`, `good`) before trusting their count.
-- **Manual count input** — one small number field, "beats counted". The count window is fixed at the run duration (`kCalibrationRunDuration`), so it is not typed — it is written to the file as `windowSeconds` automatically. Optional; may be left blank.
-- **Save run** — enabled once a run has finalized (auto-stop or manual Stop); calls `recorder.save(countedBeats: …, countWindowSeconds: kCalibrationRunDuration.inSeconds)`, then shows the returned absolute path on-screen (selectable text) **and** `ppgLog`s it, so the path to `adb pull` is unmistakable.
+### Display (quiet — no charts, no animation; FPS is load-bearing, note 03 / NFR)
 
-### Logging
+- Large **countdown** (`m:ss` remaining, or `1:00` before start), driven only by the 1 Hz timer — never rebuilt on RR ticks.
+- Large **display-only BPM** (`bpmProvider`) — a sanity check for the tester, labelled as such; not the reference.
+- Small **SQI** chip + **`MeasurementState`** label (from the existing providers) so the tester sees the signal is good/measuring before trusting the count.
+- Counted-beats field, Save button, saved-path text.
 
-Follow the example convention (CLAUDE.md): `ppgTap('calib_start')`, `ppgTap('calib_stop')`, `ppgTap('calib_save')` at the top of each handler; coarse milestones for run start / stop / file-written(path). One helper (`ppgLog`/`ppgTap`), no `print`.
+### State ownership (the single invariant that fixes the prior design)
+
+- `_recording` (bool) — gates **Start recording** (disabled while recording). Keyed off this screen-local flag, **never** `stateProvider`.
+- `_recorded` (bool) — gates **Save**.
+- `dispose()` cancels both timers (the screen normally stays mounted in the IndexedStack shell; `dispose` fires only on app teardown). No `setState` after `await` without a `mounted` guard.
+- The screen **never** calls `startMeasurement`/`stopMeasurement` or touches a controller/torch — the source is note 22's concern.
 
 ## Guards
 
-- Reuses `CameraPpgService`; opens no `CameraPpgSession`/controller/torch of its own (note 01). The tab-shell release rule is the single owner-arbiter across all three tabs.
-- Runs kit **defaults** (`RrAcceptance()`/`SessionPolicy()`); no `[debug]` tuning knobs on this screen (that lives on the Kit-API tab, note 14) — a calibration run must measure the unmodified defaults, and the recorder records exactly which ones.
-- Kit `lib/` untouched — `example/` only.
+- Pure consumer: opens no session/controller/torch, issues no start/stop of measurement (note 22 owns the source).
+- Recorder (note 20) unchanged — used via `start`/`stop`/`save`; `done`-finalize dormant.
+- Recorded params are the **actual** in-force config read from the shared `sessionConfigProvider` (note 22), so a run tuned via the `[debug]` knobs is described truthfully in the file — never a fresh-defaults stand-in.
+- **Known minor edge (dev tool):** navigating to **Raw** mid-recording stops the kit source (note 22 exclusivity), so the buffer stops growing; the resulting file self-evidently holds few intervals for its window rather than silently misrepresenting a full minute. Not worth machinery for a developer instrument.
 
 ## Verify
 
-- Three tabs present; entering Calibration and Start opens the camera once; switching to any other tab releases it (torch off) with no `CameraException` on return.
-- Start → timer counts up toward `1:00` → `measuring`/`good` reached → **the run auto-stops at 60 s (torch off) with no Stop tap** → enter "62" → Save → a path is shown and logged; the pulled file (note 20) has `durationMs ≈ 60000`, `manualCount.beats == 62`, `manualCount.windowSeconds == 60`, and a matching interval series.
-- Manual Stop before 60 s finalizes identically (shared `_stop()` path) and cancels the auto-stop timer — no double-stop, no torch left on.
-- Kit-API ⇆ Calibration switch mid-run releases the first tab's camera before the second opens (no concurrent-open crash).
+- Source running → **Start recording** → countdown `1:00 → 0:00` → auto-finish → enter "62" → **Save** → adb path shown; the pulled file (note 20) has `manualCount.beats == 62`, `windowSeconds ≈ 60`, and a matching interval series.
+- Source **not** running → **Start recording** shows guidance, writes no file.
+- Navigate to Kit-API mid-recording and back → recording continues, source keeps streaming (note 22 all-mounted shell).
