@@ -6,7 +6,7 @@
 
 It is one pulse source among several the `mind` app integrates (alongside `neiry_kit` and future BLE chest-straps and wearables). Each source ships as its own Flutter-plugin "kit" and is consumed by `mind_mobile` behind a domain contract — the app never talks to a sensor SDK directly. This kit wraps the [`flutter_ppg`](https://pub.dev/packages/flutter_ppg) package (camera-frame signal processing) and the [`camera`](https://pub.dev/packages/camera) plugin behind the same shape `neiry_kit` exposes, so the source drops into `mind_mobile` the same way Neiry did.
 
-The repository also ships a single example app — a developer-facing playground (not an end-user measurement UX) for whoever integrates the kit. It exposes every kit capability on real hardware: a live inspector of all data streams (RR + artifact flag, derived BPM, signal quality, SNR, finger presence, measurement state, FPS) and a settings panel for every config knob (camera override, torch, warm-up/duration, acceptance-gate params), so the kit can be validated and tuned before wiring into `mind_mobile`.
+The repository also ships a single example app — a developer-facing playground (not an end-user measurement UX) for whoever integrates the kit. It is a two-tab shell: **Raw** talks straight to `flutter_ppg`/`camera`, bypassing the kit entirely, as the signal-existence/FPS ground-truth instrument; **Kit API** dogfoods the published barrel only (via an example-only `CameraPpgService` singleton + Riverpod providers), exposing every kit capability on real hardware — a live inspector of all data streams (RR + artifact flag, derived BPM, signal quality, finger presence, measurement state) and a `[debug]` panel for live-tuning the session-policy and RR-gate knobs, so the kit can be validated and tuned before wiring into `mind_mobile`. Because both tabs drive the same exclusive camera + torch, the shell hands ownership to whichever tab is active, releasing it when Tab 2 loses focus.
 
 ## Core Features
 
@@ -20,7 +20,7 @@ The repository also ships a single example app — a developer-facing playground
 
 - **Programming language:** Dart (plugin) + Kotlin (Android) / Swift (iOS) for native camera-selection bridges
 - **Framework:** Flutter (plugin template, `plugin_platform_interface` + method/event channels)
-- **Key dependencies:** `flutter_ppg` (camera-frame PPG processing → RR intervals), `camera` (frame stream + torch control)
+- **Key dependencies:** `flutter_ppg` (camera-frame PPG processing → RR intervals), `camera` (frame stream + torch control). The `example/` app additionally depends on `flutter_riverpod` (example-only, powers the Kit-API tab's service/stream providers) — never a kit dependency.
 - **Database:** none — produces ephemeral biometric samples, not persisted here
 - **Integrations:** consumed by `mind_mobile` via a `path:` dependency; bridged into the app's `lib/Biometrics/` RR-interval source contract, tagged `camera_ppg`
 

@@ -30,6 +30,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   camera: ^0.12.0+1
   flutter_ppg: ^0.2.4
+  flutter_riverpod: ^3.3.2
 
 dev_dependencies:
   integration_test:
