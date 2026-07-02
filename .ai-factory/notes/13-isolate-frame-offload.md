@@ -28,6 +28,19 @@ Today (note 07) `CameraPpgSession` forwards each `CameraImage` straight into `Fl
 - In the example, run a measurement while a deliberately heavy animation drives the UI isolate: sustained FPS and SQI must stay at the note-02 baseline, where the pre-isolate path collapsed. That delta is the proof.
 - Unit-test the reduction in isolation (no hardware) on synthetic planes.
 
+#### Task 1 verdict (2026-07-02, on-device, Samsung SM-A705FN / Android 9, yuv420)
+
+**PASS — variant (a) confirmed: run the whole `FlutterPPGService` inside a long-lived spawned isolate.**
+
+A throwaway harness (`Isolate.spawn`, `TransferableTypedData.fromList` transfer, `CameraImage.fromPlatformData` reconstruction with the yuv420 3-element `[Y, placeholder, V]` plane rebuild, `FlutterPPGService.processImageStream` driven entirely inside the isolate, plain-value `PPGSignal` fields replied over the port) ran a real 8-second capture against the device's rear camera:
+
+- **224/224 frames sent → 224/224 signals received, 0 errors.** No `WidgetsBinding`/plugin-registrant/platform-channel errors — `defaultTargetPlatform` (via `Platform.operatingSystem`) resolved correctly inside the spawned isolate with no Flutter engine attached to it, confirming the recon note's claim.
+- Quality tally over the run: `{poor: 29, good: 191, fair: 4}` — signal quality reached `good` and RR intervals were detected (`rrCount=1` from frame ~200 onward) purely from ambient/incidental light variation (no finger was placed — that is Task 8's concern, not Task 1's), confirming the pipeline (buffer fill → filter → peak detection → RR emission) runs correctly end-to-end off the UI isolate.
+- `TransferableTypedData` transfer worked for yuv420 (Y + V planes) on every frame; bgra8888 (iOS) was **not** exercised on real hardware — no iOS device was available in this environment. Task 7's synthetic unit test is the only bgra8888 coverage; treat iOS as source-confirmed but not device-confirmed.
+- Getting the verdict out required a fallback: `dart:developer.log()` (what `ppgLog`/`nlog` route through) did not surface in this `flutter run` console setup, so the harness additionally dumped its log buffer to an app-private file (`files/isolate_probe_result.txt`) pulled via `adb shell run-as`. This was diagnostic-only scaffolding, not a kit convention change — removed with the rest of the throwaway harness.
+
+**Decision:** proceed with variant (a) for Phase 2 (Tasks 2–4). The throwaway harness (`example/lib/isolate_probe/isolate_probe_harness.dart`, plus the temporary `runIsolateProbe()` call in `example/lib/main.dart`) is deleted now that the verdict is recorded, per this task's scope note — Task 8 builds its own on-device toggle against the real `FrameIsolate`/`SignalMessage` types rather than reusing this scaffolding.
+
 ### Guards
 
 - One long-lived isolate per measurement; tear it down in `stop()`/`dispose()` (Phase 11 lifecycle) — a leaked isolate keeps the torch path warm and drains battery.
