@@ -5,6 +5,7 @@ import 'auto_detect/auto_detect_screen.dart';
 import 'auto_detect/log.dart';
 import 'providers/camera_ppg_service_provider.dart';
 import 'screens/kit_api_tab.dart';
+import 'screens/source_screen.dart';
 
 void main() {
   // Required before availableCameras() and any other plugin calls.
@@ -23,95 +24,101 @@ class CameraPpgKitExampleApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
       ),
-      home: const _TabShell(),
+      home: const _Shell(),
     );
   }
 }
 
-/// Two-tab shell: **Raw** (Tab 1, direct `flutter_ppg`/`camera` — the
-/// existing Phase-2 panels, unchanged) and **Kit API** (Tab 2, kit-barrel
-/// dogfood, spec note 14).
-///
-/// Owns an explicit [TabController] (not [DefaultTabController]) so it can
-/// listen for tab changes: the rear camera + torch cannot be opened
-/// concurrently (CLAUDE.md note 01), and both tabs can drive it — Tab 1 via
-/// direct `flutter_ppg`/`camera` access, Tab 2 via [CameraPpgService]. This
-/// shell makes **the active tab own the camera**: when the selection leaves
-/// Tab 2, it releases the camera + torch (`stopMeasurement()`) so Tab 1's
-/// direct `CameraController` open cannot collide with a still-live one
-/// (plan-review Issues 1 & 2). The service's own broadcast controllers stay
-/// open across this release (the "streams stay open" invariant, spec note
-/// 16) — returning to Tab 2 keeps the same provider subscriptions; the user
-/// just presses Start again to resume.
-class _TabShell extends ConsumerStatefulWidget {
-  const _TabShell();
+/// Named branch identity (spec note 22 / Task 3) — never a magic index.
+/// [_ShellState] builds both the [IndexedStack] children and the
+/// [NavigationBar] destinations from this enum, and gates the Raw-exclusivity
+/// hook on `_Branch.raw` rather than a literal index, so inserting a
+/// Calibration branch before Raw (a future milestone, note 21) is a one-line,
+/// index-shift-safe change.
+enum _Branch {
+  source('Source'),
+  kitApi('Kit API'),
+  raw('Raw');
 
-  @override
-  ConsumerState<_TabShell> createState() => _TabShellState();
+  const _Branch(this.title);
+
+  final String title;
 }
 
-class _TabShellState extends ConsumerState<_TabShell>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabController;
+/// Maps a branch to its screen — the single place that keeps the
+/// [IndexedStack] children in sync with [_Branch]. Both `children` (below)
+/// and `destinations` are built by iterating `_Branch.values` through this
+/// switch/enum, so inserting a branch (e.g. Calibration before Raw, note 21)
+/// only requires adding an enum case and a switch arm here — never a
+/// positional edit to a separate hardcoded widget list.
+Widget _screenFor(_Branch branch) => switch (branch) {
+      _Branch.source => const SourceScreen(),
+      _Branch.kitApi => const KitApiTab(),
+      _Branch.raw => const AutoDetectScreen(),
+    };
 
-  /// Tracks the last-seen tab index so [_onTabChanged] reacts once per
-  /// actual transition rather than on every animation tick the
-  /// [TabController] listener fires during a swipe.
-  int _previousIndex = 0;
-
-  static const int _kitApiTabIndex = 1;
-
-  @override
-  void initState() {
-    super.initState();
-    _tabController = TabController(length: 2, vsync: this)
-      ..addListener(_onTabChanged);
-  }
-
-  void _onTabChanged() {
-    final index = _tabController.index;
-    if (index == _previousIndex) return;
-    final leftKitApiTab = _previousIndex == _kitApiTabIndex && index != _kitApiTabIndex;
-    _previousIndex = index;
-    if (!leftKitApiTab) return;
-
-    ppgLog('Tab shell: left Kit API tab — releasing camera/torch');
-    // Not awaited — a TabController listener can't be async. The ordered
-    // release (stop image stream -> dispose isolate -> torch off -> dispose
-    // controller) takes hundreds of ms, so a user who switches here and
-    // immediately triggers Tab 1's auto-detect could in principle race a
-    // still-closing controller into a `CameraException`. Tab 1 only opens
-    // the camera on an explicit "Start" tap (never on tab entry), so normal
-    // human reaction time makes this unlikely in practice — a known,
-    // accepted residual race, not a fix owed here (review finding 2).
-    ref.read(cameraPpgServiceProvider).stopMeasurement();
-  }
+/// All-mounted shell: **Source** (the sole Start/Stop control), **Kit API**
+/// (pure consumer), and **Raw** (direct `flutter_ppg`/`camera` — the
+/// existing Phase-2 panels, unchanged) — spec note 22.
+///
+/// Every branch is a child of a single [IndexedStack], so switching among
+/// them never disposes a screen or drops its provider subscriptions — the
+/// [CameraPpgService] singleton is the sole owner of the source lifecycle,
+/// and navigation alone never stops measurement or breaks streams (the
+/// load-bearing property this shell replaces `_TabShell`'s
+/// "leaving Kit-API → stop" rule with).
+///
+/// The one exception is the **Raw** branch: it opens the camera directly
+/// (kit-bypass, note 14), and the rear camera + torch cannot be opened
+/// concurrently (note 01). So the shell keeps exactly one narrow navigation
+/// hook: selecting Raw stops the kit source first.
+class _Shell extends ConsumerStatefulWidget {
+  const _Shell();
 
   @override
-  void dispose() {
-    _tabController.removeListener(_onTabChanged);
-    _tabController.dispose();
-    super.dispose();
+  ConsumerState<_Shell> createState() => _ShellState();
+}
+
+class _ShellState extends ConsumerState<_Shell> {
+  _Branch _selected = _Branch.source;
+
+  void _onDestinationSelected(int index) {
+    final branch = _Branch.values[index];
+    ppgTap('nav:${branch.name}');
+    if (branch == _Branch.raw) {
+      // Not awaited — a `NavigationBar` callback can't be async. The ordered
+      // release (stop image stream -> dispose isolate -> torch off -> dispose
+      // controller) takes hundreds of ms, so a user who switches here and
+      // immediately triggers Raw's auto-detect could in principle race a
+      // still-closing controller into a `CameraException`. Raw only opens
+      // the camera on an explicit "Start" tap (never on branch entry), so
+      // normal human reaction time makes this unlikely in practice — a
+      // known, accepted residual race, not a fix owed here.
+      ppgLog('Shell: entering Raw — releasing kit source camera/torch');
+      ref.read(cameraPpgServiceProvider).stopMeasurement();
+    }
+    setState(() => _selected = branch);
   }
 
   @override
   Widget build(BuildContext context) {
+    final index = _selected.index;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Camera PPG Kit'),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(text: 'Raw'),
-            Tab(text: 'Kit API'),
-          ],
-        ),
+      appBar: AppBar(title: Text(_selected.title)),
+      body: IndexedStack(
+        index: index,
+        children: [for (final branch in _Branch.values) _screenFor(branch)],
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: const [
-          AutoDetectScreen(),
-          KitApiTab(),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: index,
+        onDestinationSelected: _onDestinationSelected,
+        destinations: [
+          for (final branch in _Branch.values)
+            NavigationDestination(
+              icon: const Icon(Icons.circle_outlined),
+              selectedIcon: const Icon(Icons.circle),
+              label: branch.title,
+            ),
         ],
       ),
     );
