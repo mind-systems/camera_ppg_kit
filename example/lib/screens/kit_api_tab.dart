@@ -1,6 +1,7 @@
 import 'package:camera_ppg_kit/camera_ppg_kit.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../auto_detect/log.dart';
 import '../providers/camera_ppg_service_provider.dart';
@@ -111,8 +112,35 @@ class _KitApiTabState extends ConsumerState<KitApiTab> {
         medianWindow: _medianWindow,
       );
 
+  /// Requests camera permission and reports whether `_start()` may proceed.
+  ///
+  /// Mirrors neiry's `_scan()` permission flow: granted → proceed; denied →
+  /// surface a retryable error; permanently denied/restricted → deep-link to
+  /// app settings and surface the permanently-denied error variant so the
+  /// existing `_errorBanner` shows the settings guidance line. Never calls
+  /// `startMeasurement()` itself — the caller decides what "proceed" means.
+  Future<bool> _checkAndRequestCameraPermission() async {
+    ppgTap('kit_permission_request');
+    final status = await Permission.camera.request();
+    if (status.isGranted) return true;
+    if (status.isPermanentlyDenied || status.isRestricted) {
+      ppgTap('kit_permission_open_settings');
+      await openAppSettings();
+      if (!mounted) return false;
+      setState(() {
+        _lastError = CameraPpgError.permissionDenied(permanentlyDenied: true);
+      });
+      return false;
+    }
+    if (!mounted) return false;
+    setState(() => _lastError = CameraPpgError.permissionDenied());
+    return false;
+  }
+
   Future<void> _start(MeasurementState currentState) async {
     ppgTap('kit_start');
+    if (!await _checkAndRequestCameraPermission()) return;
+    if (!mounted) return;
     setState(() => _lastError = null);
     final service = ref.read(cameraPpgServiceProvider);
     if (currentState == MeasurementState.done) {
