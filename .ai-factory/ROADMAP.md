@@ -31,7 +31,7 @@
 
 ## Phase 5 — Session policy
 
-- [ ] **Warm-up / duration / acceptance gating** — policy layer on `CameraPpgSession`: a warm-up window before RR is trusted, a target duration, and SQI + finger-presence acceptance (emit `poorSignal` + guidance instead of bad intervals), driving `MeasurementState`. On by default with concrete spike-tunable defaults; the host renders state, never reimplements the lifecycle. Spec: `.ai-factory/notes/09-session-policy.md`.
+- [x] **Warm-up / duration / acceptance gating** — policy layer on `CameraPpgSession`: a warm-up window before RR is trusted, a target duration, and SQI + finger-presence acceptance (emit `poorSignal` + guidance instead of bad intervals), driving `MeasurementState`. On by default with concrete spike-tunable defaults; the host renders state, never reimplements the lifecycle. Spec: `.ai-factory/notes/09-session-policy.md`. [29m 50s]
 
 ## Phase 6 — Signal processing
 

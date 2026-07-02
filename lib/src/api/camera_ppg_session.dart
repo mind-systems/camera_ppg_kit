@@ -11,6 +11,7 @@ import '../models/finger_presence.dart';
 import '../models/measurement_state.dart';
 import '../models/rr_interval.dart';
 import '../models/signal_quality.dart';
+import '../processing/session_policy.dart';
 import '../util/nlog.dart';
 import 'rr_diff.dart';
 
@@ -37,26 +38,42 @@ const Duration _probeDwell = Duration(milliseconds: 700);
 /// the first one a finger is detected on; [stop]/[dispose] release the
 /// camera and torch through a single ordered teardown.
 ///
-/// The four broadcast streams below are opened once, in the constructor,
-/// and stay open across repeated `start()`/`stop()` cycles — only
-/// [dispose] closes them. This mirrors `neiry_kit`'s `NeiryService`
-/// "streams stay open, fed on start" pattern, so consumers can subscribe
-/// once and keep listening across measurements.
+/// The broadcast streams below are opened once, in the constructor, and
+/// stay open across repeated `start()`/`stop()` cycles — only [dispose]
+/// closes them. This mirrors `neiry_kit`'s `NeiryService` "streams stay
+/// open, fed on start" pattern, so consumers can subscribe once and keep
+/// listening across measurements.
 class CameraPpgSession {
-  CameraPpgSession()
+  CameraPpgSession({SessionPolicy? policy})
       : _rrController = StreamController<RrInterval>.broadcast(),
         _qualityController = StreamController<SignalQuality>.broadcast(),
         _stateController = StreamController<MeasurementState>.broadcast(),
-        _debugSignalController = StreamController<List<double>>.broadcast();
+        _debugSignalController = StreamController<List<double>>.broadcast(),
+        _fingerPresenceController =
+            StreamController<FingerPresence>.broadcast(),
+        _policy = policy ?? SessionPolicy();
 
   final StreamController<RrInterval> _rrController;
   final StreamController<SignalQuality> _qualityController;
   final StreamController<MeasurementState> _stateController;
   final StreamController<List<double>> _debugSignalController;
+  final StreamController<FingerPresence> _fingerPresenceController;
 
-  /// Current lifecycle state. Minimal for this milestone: [MeasurementState.idle]
-  /// when not running, [MeasurementState.measuring] while streaming.
-  /// Finer `warmup`/`done`/`poorSignal` transitions are a later phase.
+  /// Warm-up/duration/acceptance policy (spec note 09) that drives [_state]
+  /// once a sensor is locked. Constructor-injectable so the example's
+  /// settings playground can pass a tuned instance; defaults to a fresh
+  /// [SessionPolicy] otherwise.
+  final SessionPolicy _policy;
+
+  /// Monotonic elapsed-time source for [_policy] — reset and started when a
+  /// sensor locks, stopped on [_release]. The policy itself stays pure and
+  /// never reads a clock; only the session does, passing [Stopwatch.elapsed]
+  /// into [SessionPolicy.onSignal] on every tick.
+  final Stopwatch _stopwatch = Stopwatch();
+
+  /// Current lifecycle state, driven tick-by-tick by [_policy] once a sensor
+  /// locks: [MeasurementState.idle] when not running, then
+  /// `warmup → measuring ⇄ poorSignal → done` per [SessionPolicy].
   MeasurementState _state = MeasurementState.idle;
 
   /// Double-start / re-entrancy guard for [start] (review F3).
@@ -107,6 +124,16 @@ class CameraPpgSession {
   /// `List<double>` only; no `flutter_ppg`/`camera` type ever crosses it.
   Stream<List<double>> get debugSignalStream => _debugSignalController.stream;
 
+  /// Broadcast stream of finger-presence classifications, updated on every
+  /// signal tick in every [MeasurementState].
+  ///
+  /// Lets the host distinguish "press your finger" ([FingerPresence.absent])
+  /// from "finger not covering the lens" ([FingerPresence.overBright]) from
+  /// "hold still / low SNR" ([qualityStream] alone can't express that
+  /// distinction) to render acceptance-gate guidance.
+  Stream<FingerPresence> get fingerPresenceStream =>
+      _fingerPresenceController.stream;
+
   /// Pins the next [start] to the rear camera identified by [id] (one of the
   /// ids returned by [availableCameras]), skipping the signal-based
   /// auto-detect round-trip entirely.
@@ -133,7 +160,8 @@ class CameraPpgSession {
   /// locks the first one a finger is detected on, and starts streaming RR
   /// intervals / quality / debug signal from it.
   ///
-  /// Returns `null` on success (state moves to [MeasurementState.measuring]).
+  /// Returns `null` on success (state moves to [MeasurementState.warmup],
+  /// then advances through [SessionPolicy] as signal ticks arrive).
   /// Returns a typed [CameraPpgError] — never throws — when no sensor reads
   /// as covered, camera/torch setup fails, or permission is denied; the
   /// session returns to [MeasurementState.idle] in every failure case.
@@ -278,7 +306,11 @@ class CameraPpgSession {
         _service = service;
         _sub = sub;
         _lastRrIntervals = const [];
-        _setState(MeasurementState.measuring);
+        _policy.reset();
+        _stopwatch
+          ..reset()
+          ..start();
+        _setState(MeasurementState.warmup);
         lockedAndStreaming = true;
         nlog('start(): locked ${description.name}, streaming');
         return null;
@@ -317,14 +349,14 @@ class CameraPpgSession {
 
   /// Stops the current measurement and releases the camera + torch.
   ///
-  /// The four broadcast streams stay open — a subsequent [start] reuses
-  /// them, matching the "streams stay open, fed on start" pattern.
+  /// The broadcast streams stay open — a subsequent [start] reuses them,
+  /// matching the "streams stay open, fed on start" pattern.
   Future<void> stop() async {
     await _release();
   }
 
   /// Releases the camera + torch (if running) and permanently closes the
-  /// four broadcast streams. Safe to call more than once.
+  /// broadcast streams. Safe to call more than once.
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
@@ -333,6 +365,7 @@ class CameraPpgSession {
     await _qualityController.close();
     await _stateController.close();
     await _debugSignalController.close();
+    await _fingerPresenceController.close();
   }
 
   /// Single ordered, idempotent teardown used by [stop], [dispose], and
@@ -365,6 +398,7 @@ class CameraPpgSession {
     // Invalidates any in-flight `start()` still suspended on an `await` —
     // see [_generation]'s doc (review Finding 1).
     _generation++;
+    _stopwatch.stop();
 
     await _tearDownHandles(
       controller: controller,
@@ -421,43 +455,73 @@ class CameraPpgSession {
     await controller?.dispose();
   }
 
-  /// Converts a [PPGSignal] to kit models and fans it out on the broadcast
-  /// streams. No `flutter_ppg` type leaves this method.
+  /// Converts a [PPGSignal] to kit models, advances [_policy], and fans the
+  /// result out on the broadcast streams. No `flutter_ppg` type leaves this
+  /// method.
   void _onSignal(PPGSignal signal) {
-    // RR: PPGSignal.rrIntervals is recomputed from scratch every frame from
-    // a sliding window, not an append-only log — emit only the newly
-    // produced interval(s). Minimal passthrough; real dedup + artifact
-    // detection lands in the Phase-6 acceptance gate (note 12).
+    // RR bookkeeping — diff + `_lastRrIntervals` update — runs
+    // unconditionally, every tick, regardless of trust state (see the RR
+    // gating note below). PPGSignal.rrIntervals is recomputed from scratch
+    // every frame from a sliding window, not an append-only log — this
+    // diffs out only the newly-produced interval(s). Minimal passthrough;
+    // real dedup + artifact detection lands in the Phase-6 acceptance gate
+    // (note 12).
     final newIntervals = diffNewIntervals(_lastRrIntervals, signal.rrIntervals);
     _lastRrIntervals = signal.rrIntervals;
 
-    for (final rr in newIntervals) {
-      if (_rrController.isClosed) continue;
-      // Timestamp caveat: signal.timestamp is the frame-processing time,
-      // assigned to every interval in this batch — a fair approximation for
-      // this passthrough, but it diverges from RrInterval.timestamp's
-      // "later peak" contract. PPGSignal.peakIndices is available for
-      // precise per-peak timing if a later phase wants it.
-      _rrController.add(RrInterval(
-        intervalMs: rr.round(),
-        timestamp: signal.timestamp,
-        isArtifact: false,
-      ));
+    // The kit's own SignalQuality (from SNR), never PPGSignal.quality — that
+    // type is hidden by the `hide SignalQuality` import above.
+    final quality = SignalQuality.fromSnr(signal.snr);
+    final presence = FingerPresence.fromRawIntensity(signal.rawIntensity);
+
+    // Advance the warm-up/duration/acceptance policy (spec note 09) with
+    // this tick's elapsed time off the session's own [_stopwatch] — the
+    // policy itself stays pure and never reads a clock.
+    final next = _policy.onSignal(
+      elapsed: _stopwatch.elapsed,
+      quality: quality,
+      presence: presence,
+    );
+
+    // RR gating — gate only the emit, not the bookkeeping above. If the
+    // whole block (diff + `_lastRrIntervals` update) were guarded by
+    // `rrTrusted` instead, `_lastRrIntervals` would stay stale through
+    // warm-up/poorSignal, and the first trusted tick afterwards would diff
+    // against a stale window and dump the entire withheld window as
+    // "trusted" — exactly the beats the spec says to withhold. Keeping the
+    // bookkeeping unconditional means those beats are quietly consumed and
+    // discarded, not deferred.
+    if (_policy.rrTrusted) {
+      for (final rr in newIntervals) {
+        if (_rrController.isClosed) continue;
+        // Timestamp caveat: signal.timestamp is the frame-processing time,
+        // assigned to every interval in this batch — a fair approximation
+        // for this passthrough, but it diverges from RrInterval.timestamp's
+        // "later peak" contract. PPGSignal.peakIndices is available for
+        // precise per-peak timing if a later phase wants it.
+        _rrController.add(RrInterval(
+          intervalMs: rr.round(),
+          timestamp: signal.timestamp,
+          isArtifact: false,
+        ));
+      }
     }
 
+    // Quality/finger-presence/debug streams flow in every state — the host
+    // renders quality and guidance continuously, not just while measuring.
     if (!_qualityController.isClosed) {
-      // The kit's own SignalQuality (from SNR), never PPGSignal.quality —
-      // that type is hidden by the `hide SignalQuality` import above.
-      _qualityController.add(SignalQuality.fromSnr(signal.snr));
+      _qualityController.add(quality);
+    }
+
+    if (!_fingerPresenceController.isClosed) {
+      _fingerPresenceController.add(presence);
     }
 
     if (!_debugSignalController.isClosed) {
       _debugSignalController.add([signal.rawIntensity, signal.filteredIntensity]);
     }
 
-    // Minimal state machine: remain `measuring` while streaming. No-op once
-    // already measuring (_setState only emits on an actual change).
-    _setState(MeasurementState.measuring);
+    _setState(next);
   }
 
   void _setState(MeasurementState next) {
