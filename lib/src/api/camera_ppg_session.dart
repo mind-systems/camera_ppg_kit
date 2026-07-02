@@ -11,6 +11,8 @@ import '../models/finger_presence.dart';
 import '../models/measurement_state.dart';
 import '../models/rr_interval.dart';
 import '../models/signal_quality.dart';
+import '../processing/frame_isolate.dart';
+import '../processing/frame_message.dart';
 import '../processing/rr_acceptance.dart';
 import '../processing/session_policy.dart';
 import '../util/nlog.dart';
@@ -105,11 +107,12 @@ class CameraPpgSession {
   /// (review Finding 1).
   int _generation = 0;
 
-  // Internal camera/flutter_ppg handles.
+  // Internal camera/frame-isolate handles. The measurement frame path runs
+  // through a long-lived background isolate (spec note 13 / plan 09) rather
+  // than a UI-isolate `FlutterPPGService` — see [FrameIsolate].
   CameraController? _controller;
-  StreamController<CameraImage>? _imageStreamCtrl;
-  FlutterPPGService? _service;
-  StreamSubscription<PPGSignal>? _sub;
+  FrameIsolate? _frameIsolate;
+  StreamSubscription<SignalMessage>? _sub;
 
   /// Last-seen `PPGSignal.rrIntervals` window, used to diff out only the
   /// newly-produced interval(s) on each signal (see [rr_diff.dart]).
@@ -247,9 +250,8 @@ class CameraPpgSession {
       // never touched, so `_release()` (already run by the concurrent
       // stop()/dispose()) has nothing left to do.
       CameraController? controller;
-      StreamController<CameraImage>? imageStreamCtrl;
-      FlutterPPGService? service;
-      StreamSubscription<PPGSignal>? sub;
+      FrameIsolate? frameIsolate;
+      StreamSubscription<SignalMessage>? sub;
 
       try {
         controller = CameraController(
@@ -287,21 +289,31 @@ class CameraPpgSession {
           return null;
         }
 
-        // Bridge startImageStream → StreamController<CameraImage>. Use
-        // `?.` on the captured local so a late frame callback after
-        // teardown cannot crash.
-        imageStreamCtrl = StreamController<CameraImage>();
+        // Route frames through a long-lived background isolate (spec note 13
+        // / plan 09) instead of a UI-isolate FlutterPPGService — a heavy
+        // co-tenant screen can't starve the frame stream if the DSP work
+        // never runs on the UI isolate to begin with.
+        frameIsolate = await FrameIsolate.spawn();
+        if (stale()) {
+          nlog('start(): abandoned — stop()/dispose() ran while spawning the frame isolate');
+          return null;
+        }
+
+        // `fi` is a non-nullable capture for the closure below — safe
+        // because it is assigned once, immediately above, and never
+        // reassigned to null in this scope; `FrameIsolate.sink()` itself is
+        // a no-op after `dispose()`, so a late frame callback after
+        // teardown cannot crash (the isolate analogue of the `?.`-guarded
+        // `imageStreamCtrl` bridge used elsewhere in this file).
+        final fi = frameIsolate;
         controller.startImageStream((img) {
-          if (imageStreamCtrl?.isClosed != true) {
-            imageStreamCtrl?.add(img);
-          }
+          fi.sink(frameMessageFromCameraImage(img));
         });
 
-        service = FlutterPPGService(config: const PPGConfig());
-        sub = service.processImageStream(imageStreamCtrl.stream).listen(
+        sub = frameIsolate.signals.listen(
           _onSignal,
           onError: (Object e, StackTrace st) {
-            nlog('PPGService stream error', error: e, stackTrace: st);
+            nlog('frame isolate signal stream error', error: e, stackTrace: st);
           },
         );
 
@@ -311,8 +323,7 @@ class CameraPpgSession {
         }
 
         _controller = controller;
-        _imageStreamCtrl = imageStreamCtrl;
-        _service = service;
+        _frameIsolate = frameIsolate;
         _sub = sub;
         _lastRrIntervals = const [];
         _policy.reset();
@@ -331,9 +342,8 @@ class CameraPpgSession {
         if (!lockedAndStreaming) {
           await _tearDownHandles(
             controller: controller,
-            imageStreamCtrl: imageStreamCtrl,
-            service: service,
-            sub: sub,
+            frameIsolate: frameIsolate,
+            signalSub: sub,
           );
         }
       }
@@ -395,13 +405,11 @@ class CameraPpgSession {
   /// 6. dispose the camera controller
   Future<void> _release() async {
     final controller = _controller;
-    final imageStreamCtrl = _imageStreamCtrl;
-    final service = _service;
+    final frameIsolate = _frameIsolate;
     final sub = _sub;
 
     _controller = null;
-    _imageStreamCtrl = null;
-    _service = null;
+    _frameIsolate = null;
     _sub = null;
     _running = false;
     // Invalidates any in-flight `start()` still suspended on an `await` —
@@ -412,35 +420,48 @@ class CameraPpgSession {
 
     await _tearDownHandles(
       controller: controller,
-      imageStreamCtrl: imageStreamCtrl,
-      service: service,
-      sub: sub,
+      frameIsolate: frameIsolate,
+      signalSub: sub,
     );
 
     _setState(MeasurementState.idle);
     nlog('session released');
   }
 
-  /// Shared ordered teardown for a set of camera/flutter_ppg handles —
-  /// every field is optional and independently tolerated as absent. Used
-  /// by [_release] (session-owned handles), [_probeCameraCoverage]
-  /// (per-probe local handles), and [start]'s mid-setup abandon path
-  /// (local handles not yet promoted to session fields). Order (spike-
-  /// proven invariant, see coverage_detector.dart / measurement_runner.dart
-  /// in example/):
+  /// Shared ordered teardown for a set of camera/frame-processing handles —
+  /// every field is optional and independently tolerated as absent. Two
+  /// independent handle shapes share this helper:
+  /// - **Probe shape** (`imageStreamCtrl`/`service`/`sub`): used by
+  ///   [_probeCameraCoverage]'s per-probe local handles, which still bridge
+  ///   `startImageStream` straight into a UI-isolate `FlutterPPGService`
+  ///   (short-lived, not FPS-sensitive — out of the isolate-offload scope
+  ///   per spec note 13).
+  /// - **Session shape** (`frameIsolate`/`signalSub`): used by [_release]
+  ///   (session-owned handles) and [start]'s mid-setup abandon path (local
+  ///   handles not yet promoted to session fields) — the sustained
+  ///   measurement path, routed through [FrameIsolate].
+  ///
+  /// Order (spike-proven invariant, see coverage_detector.dart /
+  /// measurement_runner.dart in example/, mirrored *inside* the isolate for
+  /// the session shape by [FrameIsolate.dispose]):
   /// 1. stop the camera image stream
-  /// 2. close the `StreamController<CameraImage>` bridge BEFORE cancelling
-  ///    the `PPGSignal` subscription — `processImageStream` is an `async*`
-  ///    generator parked on `await for`; cancelling first deadlocks it.
-  /// 3. cancel the `PPGSignal` subscription
-  /// 4. dispose the PPG service
-  /// 5. torch off
-  /// 6. dispose the camera controller
+  /// 2. close/stop feeding the frame path — probe shape: close the
+  ///    `StreamController<CameraImage>` bridge BEFORE cancelling the
+  ///    `PPGSignal` subscription (`processImageStream` is an `async*`
+  ///    generator parked on `await for`; cancelling first deadlocks it);
+  ///    session shape: cancel the `SignalMessage` subscription, then let
+  ///    [FrameIsolate.dispose] run the same close-before-cancel ordering
+  ///    inside the isolate before it is killed.
+  /// 3. dispose the PPG service / frame isolate
+  /// 4. torch off
+  /// 5. dispose the camera controller
   Future<void> _tearDownHandles({
     CameraController? controller,
     StreamController<CameraImage>? imageStreamCtrl,
     FlutterPPGService? service,
     StreamSubscription<PPGSignal>? sub,
+    FrameIsolate? frameIsolate,
+    StreamSubscription<SignalMessage>? signalSub,
   }) async {
     if (controller != null && controller.value.isStreamingImages) {
       try {
@@ -450,9 +471,16 @@ class CameraPpgSession {
       }
     }
 
+    // Probe shape.
     await imageStreamCtrl?.close();
     await sub?.cancel();
     service?.dispose();
+
+    // Session shape — cancel the main-isolate subscription to
+    // `frameIsolate.signals` first, then let the isolate run its own
+    // close-before-cancel teardown before it is killed.
+    await signalSub?.cancel();
+    await frameIsolate?.dispose();
 
     if (controller != null && controller.value.isInitialized) {
       try {
@@ -465,22 +493,31 @@ class CameraPpgSession {
     await controller?.dispose();
   }
 
-  /// Converts a [PPGSignal] to kit models, advances [_policy], and fans the
-  /// result out on the broadcast streams. No `flutter_ppg` type leaves this
-  /// method.
-  void _onSignal(PPGSignal signal) {
+  /// Converts a [SignalMessage] (the sendable subset of `PPGSignal` produced
+  /// inside [FrameIsolate]) to kit models, advances [_policy], and fans the
+  /// result out on the broadcast streams. No `flutter_ppg`/isolate type
+  /// leaves this method.
+  void _onSignal(SignalMessage signal) {
+    if (signal.isError) {
+      // Isolate-side failures cross as data (spec note 13 Guards) — log and
+      // drop the tick rather than throwing; the next signal recovers state
+      // normally.
+      nlog('frame isolate signal error: ${signal.error}');
+      return;
+    }
+
     // RR bookkeeping — diff + `_lastRrIntervals` update — runs
     // unconditionally, every tick, regardless of trust state (see the RR
-    // gating note below). PPGSignal.rrIntervals is recomputed from scratch
-    // every frame from a sliding window, not an append-only log — this
-    // diffs out only the newly-produced interval(s). Artifact detection
-    // itself happens per-beat in the RR-gating block below via
-    // [_acceptance] (note 12).
+    // gating note below). PPGSignal.rrIntervals (mirrored 1:1 into
+    // SignalMessage.rrIntervals) is recomputed from scratch every frame from
+    // a sliding window, not an append-only log — this diffs out only the
+    // newly-produced interval(s). Artifact detection itself happens
+    // per-beat in the RR-gating block below via [_acceptance] (note 12).
     final newIntervals = diffNewIntervals(_lastRrIntervals, signal.rrIntervals);
     _lastRrIntervals = signal.rrIntervals;
 
-    // The kit's own SignalQuality (from SNR), never PPGSignal.quality — that
-    // type is hidden by the `hide SignalQuality` import above.
+    // The kit's own SignalQuality (from SNR), never flutter_ppg's
+    // PPGSignal.quality — SignalMessage never carries that field at all.
     final quality = SignalQuality.fromSnr(signal.snr);
     final presence = FingerPresence.fromRawIntensity(signal.rawIntensity);
 
@@ -502,20 +539,25 @@ class CameraPpgSession {
     // bookkeeping unconditional means those beats are quietly consumed and
     // discarded, not deferred.
     if (_policy.rrTrusted) {
+      // Frame-processing timestamp, reconstructed from the sendable
+      // SignalMessage.timestampMicros (mirrors PPGSignal.timestamp) once per
+      // tick rather than per interval below.
+      final timestamp = DateTime.fromMicrosecondsSinceEpoch(signal.timestampMicros);
       for (final rr in newIntervals) {
         if (_rrController.isClosed) continue;
-        // Timestamp caveat: signal.timestamp is the frame-processing time,
-        // assigned to every interval in this batch — a fair approximation
-        // for this passthrough, but it diverges from RrInterval.timestamp's
-        // "later peak" contract. PPGSignal.peakIndices is available for
-        // precise per-peak timing if a later phase wants it.
+        // Timestamp caveat: assigned to every interval in this batch — a
+        // fair approximation for this passthrough, but it diverges from
+        // RrInterval.timestamp's "later peak" contract. PPGSignal.peakIndices
+        // would give precise per-peak timing if a later phase wants it, but
+        // SignalMessage deliberately doesn't carry it (not part of the five
+        // fields _onSignal consumes).
         //
         // Every trusted interval is fed through [_acceptance], artifact or
         // not — its own history-append logic already skips artifacts, so
         // there is no need to pre-filter here.
         final candidate = RrInterval(
           intervalMs: rr.round(),
-          timestamp: signal.timestamp,
+          timestamp: timestamp,
           isArtifact: false,
         );
         _rrController.add(_acceptance.evaluate(candidate));
