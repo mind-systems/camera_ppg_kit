@@ -334,22 +334,6 @@ class CameraPpgSession {
         } catch (e) {
           nlog('setFocusMode(locked) not supported on this device: $e');
         }
-
-        // TEMP diagnostic (note 38 pre-work): log the device's zoom range so
-        // we can size the zoom slider before implementing it. Uses print() on
-        // purpose — nlog() routes to dart:developer.log() which does not reach
-        // logcat (by design, CLAUDE.md), so it can't be observed via adb.
-        // Remove this whole block once the slider-range decision lands.
-        try {
-          final minZoom = await controller.getMinZoomLevel();
-          final maxZoom = await controller.getMaxZoomLevel();
-          // ignore: avoid_print
-          print('CAMPPG_ZOOM camera=${description.name} min=$minZoom max=$maxZoom');
-        } catch (e) {
-          // ignore: avoid_print
-          print('CAMPPG_ZOOM query failed on this device: $e');
-        }
-
         if (stale()) {
           nlog('start(): abandoned — stop()/dispose() ran during torch/lock setup');
           return null;

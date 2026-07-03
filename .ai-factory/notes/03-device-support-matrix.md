@@ -41,6 +41,31 @@ A matrix (markdown table in `.ai-factory/` or `docs/`) with one row per tested p
 - **Two halving artifacts** (instantaneous BPM spiked to ~110–130, RR ≈ 458–542 ms) where the detector picked a harmonic / dicrotic notch. `flutter_ppg`'s outlier filter caught them (rejection ratio jumped to ~0.78), but the *instantaneous* BPM still misreported. Motivates the Phase-8 RR acceptance gate (note 12): a rolling-median consistency filter rejects a 458 ms interval against a ~1040 ms median.
 - **RR resolution is FPS-quantized.** Intervals land on ~42 ms steps (= 1000/24 ms frame period), so BPM is discrete (53.3 / 55.4 / 57.6 / 60.0 / 62.6…) and fine-grained HRV (SDRR ~30 ms) sits near the quantization floor. BPM/RR is usable; precise HRV from camera PPG at this frame rate is coarse (peak-time interpolation could improve it — open question).
 
+### Calibration validation — handoff #1 (2026-07-03, post de-halving, A70)
+
+Two Calibration-screen runs against a manual reference, after the note-30 adaptive
+de-halving landed and with the finger on a cleanly-covered lens:
+
+| Run | Manual reference | Kit (mean accepted RR → BPM) | Artifacts | RR cluster |
+|---|---|---|---|---|
+| Resting | 60.0 BPM (59 beats / 59 s) | 1003 ms → **59.8 BPM** | 0 / 134 | unimodal ~1000 ms, **no halved cluster** |
+| Elevated | 87.5 BPM (86 beats / 59 s) | 649 ms → **92.4 BPM** | 15 / 800 (1.9%) | 600–700 ms; **0 accepted > 900 ms** |
+
+- **Halving resolved.** The two-halving-artifacts problem this note first recorded is
+  gone: the resting run is a clean unimodal ~1000 ms cluster with 0 artifacts, exact to
+  0.2 BPM against the manual count (was 112–131 BPM ≈1.9× before the fix).
+- **No over-merge at elevated rate** — the feared failure mode (de-halver collapsing a
+  fast pulse toward rest) is absent: the whole accepted cluster sits at the elevated
+  600–700 ms, with zero accepted intervals > 900 ms.
+- **+4.9 BPM overshoot at elevated** (92.4 vs 87.5) — minor, safe direction; likely
+  manual-count error on a fast pulse and/or the recorder averaging re-emitted intervals
+  (over-weights shorter ones). Not re-tuned: resting is exact and any threshold change
+  risks it.
+- **Validated defaults (committed as-is, note 34):** gate `minRrMs=300, thr=0.4,
+  coldStart=3, medianWindow=5`; policy `warmup=5 s, silence=3 s, sqiFloor=poor`;
+  de-halving tracker params per note 30. Fixtures: `.calibration/calib_20260703_230446.json`
+  (rest), `calib_20260703_230927.json` (elevated).
+
 ### Go/no-go statement
 
 **Decision: GO (2026-06-22).** Validated end-to-end on the Galaxy A70 — auto-detect locks the covered lens, the torch drives a clean signal, SQI holds `good`, the frame path sustains ~24 FPS without starvation, and RR/BPM is physiologically plausible (resting ~57–60 BPM). The spike's question — *does a usable contact-PPG signal exist on real hardware* — is answered yes, so the kit ships and proceeds to implementation (Phases 3–12). The matrix stays provisional: broadening device coverage (iPhone Pro multi-lens island, single-camera budget phone) and deriving any deny-list move into hardening (Phase 11) rather than gating the build. Known limitations to carry forward: occasional peak-halving artifacts (addressed by the Phase-8 acceptance gate) and FPS-quantized RR resolution.

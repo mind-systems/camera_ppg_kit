@@ -49,3 +49,6 @@ migrate_working_dir/
 # Xcode
 **/xcuserdata/
 **/*.xcscmblueprint
+
+# Local on-device calibration captures (adb-pulled fixtures, not versioned)
+.calibration/
