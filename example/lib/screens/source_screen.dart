@@ -137,9 +137,7 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
           ],
           _controlCard(lifecycle),
           const SizedBox(height: 16),
-          _previewCard(),
-          const SizedBox(height: 16),
-          _signalCard(),
+          _signalCard(lifecycle),
           const SizedBox(height: 16),
           _cameraOverrideCard(lifecycle),
           const SizedBox(height: 16),
@@ -229,48 +227,43 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
     );
   }
 
-  /// Boxed live camera texture for whatever sensor auto-detect (or the
-  /// override below) locked (plan 25) — the verification affordance letting
-  /// the operator *see* which lens locked and whether the finger fully
-  /// covers it.
-  ///
-  /// `buildPreview()` is read fresh on every build — never cached across a
-  /// stop — so the placeholder → live-texture flip rides the same
-  /// `ref.watch(lifecycleProvider)` rebuild already driving the rest of this
-  /// screen (`starting -> warmup` is the first rebuild where the session has
-  /// a locked, initialized controller); it naturally reverts to the
-  /// placeholder once `stop()`/`dispose()` null out the session's controller.
-  Widget _previewCard() {
-    final preview = ref.read(cameraPpgServiceProvider).session?.buildPreview();
-    return SectionCard(
-      title: 'Preview',
-      child: preview != null
-          ? ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: AspectRatio(
-                aspectRatio: 3 / 4,
-                child: preview,
-              ),
-            )
-          : const AsyncEmpty('no preview — start the source'),
-    );
-  }
-
   /// Source status — its **own copy** of the status display, so the operator
   /// confirms the source is live before navigating to a consumer screen.
   /// Kit-API keeps an identical copy (Scope notes) — deliberately not
   /// factored into a shared widget.
   ///
-  /// `qualityProvider` is a `StreamProvider` that sits in the `loading`
-  /// state (not a null-data state) until its first emit, so the SQI chip is
-  /// gated on the `AsyncValue` itself: `loading` renders `AsyncEmpty`
-  /// ("waiting for signal…"), `data` renders the `StatusChip`, `error`
-  /// renders `AsyncError`. Finger-presence has no live-source ambiguity in
-  /// practice worth a spinner, so it stays a plain `LabelRow` reusing the
-  /// existing `null → 'unknown'` fallback.
-  Widget _signalCard() {
+  /// Top row is the SQI chip beside a small square live-camera preview (plan
+  /// 27, folding in note 35's standalone preview card); `Finger` stays its
+  /// own row below, unchanged.
+  ///
+  /// Both the SQI side and the preview square are gated on `lifecycle`, not
+  /// on the last stream/session value: while `!lifecycle.isActive` (`idle`,
+  /// `starting`, `stopping`) they always show "waiting for signal…" /
+  /// placeholder, even if `qualityProvider` or the session still hold a
+  /// stale last value from before Stop. Only while `lifecycle.isActive`
+  /// (`warmup`/`measuring`/`poorSignal`) do they render the live values:
+  ///
+  /// - SQI: `qualityProvider` is a `StreamProvider` that sits in the
+  ///   `loading` state (not a null-data state) until its first emit, so the
+  ///   chip is gated on the `AsyncValue` itself: `loading` renders
+  ///   `AsyncEmpty` ("waiting for signal…"), `data` renders the
+  ///   `StatusChip`, `error` renders `AsyncError`.
+  /// - Preview: `buildPreview()` is read fresh on every build — never cached
+  ///   across a stop — so the placeholder → live-texture flip rides the same
+  ///   `ref.watch(lifecycleProvider)` rebuild already driving the rest of
+  ///   this screen (`starting -> warmup` is the first rebuild where the
+  ///   session has a locked, initialized controller); it naturally reverts
+  ///   to the placeholder once `stop()`/`dispose()` null out the session's
+  ///   controller, and the `lifecycle` gate above forces that reversion the
+  ///   instant Stop is pressed rather than waiting on the last emit.
+  ///
+  /// Finger-presence has no live-source ambiguity in practice worth a
+  /// spinner, so it stays a plain `LabelRow` reusing the existing
+  /// `null → 'unknown'` fallback, and is deliberately left ungated.
+  Widget _signalCard(SourceLifecycle lifecycle) {
     final qualityAsync = ref.watch(qualityProvider);
     final presence = ref.watch(fingerPresenceProvider).value;
+    final active = lifecycle.isActive;
 
     final presenceLabel = switch (presence) {
       FingerPresence.present => 'finger present',
@@ -279,15 +272,36 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
       null => 'unknown',
     };
 
+    final preview = active ? ref.read(cameraPpgServiceProvider).session?.buildPreview() : null;
+
     return SectionCard(
       title: 'Signal',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          qualityAsync.when(
-            data: (quality) => StatusChip('SQI: ${quality.name}', qualityColor(quality)),
-            loading: () => const AsyncEmpty('waiting for signal…'),
-            error: (error, _) => AsyncError(error),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: !active
+                    ? const AsyncEmpty('waiting for signal…')
+                    : qualityAsync.when(
+                        data: (quality) => StatusChip('SQI: ${quality.name}', qualityColor(quality)),
+                        loading: () => const AsyncEmpty('waiting for signal…'),
+                        error: (error, _) => AsyncError(error),
+                      ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: preview ?? const AsyncEmpty('no preview'),
+                  ),
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           LabelRow('Finger', presenceLabel),
@@ -305,10 +319,10 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   ///
   /// Also shows which sensor auto-detect (or the pin) actually locked, read
   /// fresh off the session's `resolvedCamera` (plan 26) — the text
-  /// complement to `_previewCard()`'s live texture, so camera selection is
-  /// verifiable without reading pixels. Read directly rather than through a
-  /// stream provider: this rides the same `ref.watch(lifecycleProvider)`
-  /// rebuild `_previewCard()` already relies on, so no extra wiring is
+  /// complement to `_signalCard()`'s live preview square, so camera selection
+  /// is verifiable without reading pixels. Read directly rather than through
+  /// a stream provider: this rides the same `ref.watch(lifecycleProvider)`
+  /// rebuild `_signalCard()` already relies on, so no extra wiring is
   /// needed. The transient `'auto-detecting…'` text is gated on
   /// [SourceLifecycle.starting] specifically, not on "locked but
   /// unresolved" in general — `stopMeasurement()` nulls the service's
