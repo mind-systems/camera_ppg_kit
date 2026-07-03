@@ -98,6 +98,13 @@
 
 - [x] **Drop-in API freeze + docs** — finalize the barrel to match `mind_mobile`'s RR-interval source contract (tagged `camera_ppg`, preferred-with-fallback alongside worn sensors); enumerate the `[debug]` extras explicitly; consumer README/docs. The `lib/Biometrics/` adapter lives in `mind_mobile`, not here. Spec: `.ai-factory/notes/19-drop-in-api-freeze.md`. [10m 22s]
 
+## Phase 10.5 — Raw motion data stream
+
+> The kit is the one context that reliably knows the phone is **held in the user's hand** (finger on the lens during a measurement), so it emits raw device-motion as an **orthogonal channel** — deliberately **decoupled from PPG signal quality** (that coupling needs its own reference study, out of scope). Raw accelerometer+gyroscope samples out; interpretation (stillness) is the consumer's. Additive post-freeze addition to the barrel (note 19).
+
+- [ ] **Raw motion stream from the kit** — add `sensors_plus` (`flutter pub add`); model `MotionSample { accel x/y/z, gyro x/y/z, timestamp }` (`lib/src/models/`, barrel-exported); `lib/src/motion/motion_reader.dart` subscribing accel+gyro (start `SensorInterval.uiInterval`, provisional) → combined `MotionSample` per accel tick; new broadcast `motionStream` on `CameraPpgSession`, started on sensor-lock and stopped in `_release()` (session-scoped). **Fully decoupled** — never touches `_dehalving`/`_acceptance`/`_policy`/the frame isolate; raw passthrough, no stillness metric, no rate cap. Add the stream to `docs/measurement.md`'s streams table (distinct from RR/quality, raw, measurement-active only). No native code. Spec: `.ai-factory/notes/43-motion-raw-stream.md`.
+- [ ] **Motion card on the Streams tab (live values + Hz)** — example-only: fan `session.motionStream` through `camera_ppg_service.dart` → a `motionProvider` (`stream_providers.dart`); add `_motionCard` on `streams_screen.dart` showing live accel/gyro + a **real-time Hz counter reusing `FpsMeter`** (`record()` per sample → `fps`). Lets the dev see the actual sample rate and decide if throttling is needed (throttle is a later observation-driven follow-up). Pure `ref.watch` consumer. Depends on note 43. Spec: `.ai-factory/notes/44-motion-card-streams-tab.md`.
+
 ---STOP---
 (calibration #2)
 

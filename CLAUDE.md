@@ -4,85 +4,63 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-`camera_ppg_kit` is a **Flutter plugin** that turns the phone's **rear camera + flash (torch)** into a heart-rate source via contact PPG (photoplethysmography): the user presses a fingertip over the lens and the LED, the camera observes the pulsatile change in red-channel intensity, and the kit emits a stream of **RR intervals** (inter-beat intervals, in milliseconds).
+`camera_ppg_kit` is a **Flutter plugin** that turns the phone's rear camera + flash (torch) into a contact-PPG heart-rate source: a fingertip over the lens and LED, and the kit emits a stream of **RR intervals** (ms) plus a signal-quality assessment. BPM/HRV are left to the consumer.
 
-It is one **pulse source** among several the app will integrate (alongside `neiry_kit` and future BLE chest-straps, wearables, etc.). Each source ships as its own kit and is consumed by `mind_mobile` behind a domain contract — the app never talks to a vendor SDK directly.
+It wraps two packages — [`flutter_ppg`](https://pub.dev/packages/flutter_ppg) (the signal DSP) and [`camera`](https://pub.dev/packages/camera) (frame stream + torch) — and adds the parts they leave to the host. An `example/` app exercises the source end-to-end on real hardware.
 
-The repo also contains an **example app** to exercise the source end-to-end (camera permission, finger-presence, signal quality, live RR/BPM) on real hardware **before** integrating into `mind_mobile`.
+## flutter_ppg vs what the kit adds
 
-## Why a kit and not just `flutter_ppg` directly
+`flutter_ppg` owns the DSP: red-channel extraction, bandpass, peak detection, RR intervals, SNR/SQI, finger-presence. Its only camera coupling is `extractRedChannel(CameraImage)` — one number per frame; everything downstream runs on the 1-D intensity series.
 
-The heavy lifting (red-channel extraction, bandpass, peak detection, RR-interval emission, signal-quality index) is done by the [`flutter_ppg`](https://pub.dev/packages/flutter_ppg) package, which this kit depends on. The kit exists to **wrap** that package behind the same shape `neiry_kit` exposes, so the source drops into `mind_mobile` the same way Neiry did:
+The kit adds what `flutter_ppg` leaves to the host:
 
-- A small, idiomatic Dart API (`lib/camera_ppg_kit.dart` barrel) that hides `flutter_ppg`/`camera` details.
-- Lifecycle and concerns that `flutter_ppg` explicitly leaves to the host: **which camera to use** (signal-based auto-detect — the kit detects which sensor the user covered with the flash), torch control, warm-up, session duration, acceptance gating, and quality-based artifact handling.
-- Native platform code (`android/`, `ios/`) is a **deletion candidate**: enumeration is Dart-side (the `camera` plugin's `availableCameras()` lists every rear lens on iOS and one logical back on Android) and torch runs through `setFlashMode(FlashMode.torch)`, so native code ships only as a thin torch fallback if that proves insufficient on some device. Selection logic stays in Dart.
+| Concern | Where |
+|---|---|
+| Camera selection (signal-based auto-detect) + override | `src/api/camera_ppg_session.dart` |
+| Torch, warm-up, session lifecycle | `src/api/camera_ppg_session.dart`, `src/processing/session_policy.dart` |
+| Off-UI-isolate frame path | `src/processing/frame_isolate.dart`, `frame_message.dart` |
+| De-halving (harmonic-pair merge) | `src/processing/rr_dehalving.dart` |
+| Physiological acceptance gate | `src/processing/rr_acceptance.dart` |
 
-`mind_mobile` adds this kit as `path: ../camera_ppg_kit`, works only with its Dart API, and bridges it into the domain via an adapter in `lib/Biometrics/` (mirroring how `lib/Bci/NeiryBciProvider.dart` adapts `neiry_kit`). The adapter maps the kit's RR stream onto the existing **RR-interval source contract** (`docs/biometrics/active-rr-source.md` in `mind_mobile`), tagged as a `camera_ppg` source so the preferred-with-fallback policy can choose between camera and a worn device.
+## Structure
 
-## What this source emits
+| Path | Purpose |
+|---|---|
+| `lib/camera_ppg_kit.dart` | Public barrel — the only import a consumer uses |
+| `src/api/camera_ppg_session.dart` | Measurement surface: start/stop/dispose, the streams, `availableCameras()`/`useCamera()`, `buildPreview()`, `resolvedCamera` |
+| `src/models/` | Value types that cross the barrel: `RrInterval`, `SignalQuality`, `MeasurementState`, `FingerPresence`, `CameraPpgError`, `CameraPpgCameraInfo` |
+| `src/processing/` | Dart signal handling on top of flutter_ppg — de-halving, acceptance gate, session policy, frame isolate |
+| `example/` | Standalone app to exercise the source on real hardware |
 
-- **RR intervals** (ms) — the primary output, physiologically bounded (~300–2000 ms). This is the same data type a chest-strap or `neiry_kit`'s PPG peak detector produces, so it maps onto the app's existing RR contract directly.
-- **Signal Quality Index** (Good / Fair / Poor), SNR, finger-presence — drive the artifact/acceptance policy and the UI's "press your finger" guidance.
-- **BPM and HRV metrics are NOT provided by the source** — the consumer computes them from the RR stream. Keep that boundary: the kit emits intervals + quality, nothing higher-level.
+## Invariants (do not break)
 
-## Domain constraints that shape the design
-
-- **Picking the lens that sits under the finger is the central hardware problem.** A fingertip must cover a lens *and* the torch at once, which is only possible where they sit close. The user places a finger over a comfortable lens+flash and presses Start; the kit then runs one round-trip over the rear sensors (torch on, most-likely-covered first) and **locks the first that reads covered** (finger-presence/signal). If none is covered it surfaces a typed error to retry. Cameras can't be opened concurrently, so the round-trip is sequential. Degrade honestly (quality-gate + guidance) where no single fingertip can cover a lens and the flash together.
-- **FPS sensitivity is high.** Heavy animations / frequent `setState` starve the frame stream and corrupt the signal. Measurement should run on a quiet screen, and frame processing should stay off the UI work — favour an isolate for the heavy path. Do not co-locate a live measurement with the breathing-session animation in the host app.
-- **Contact PPG needs a still finger for 30–60 s** for stable intervals. It is unsuitable for motion / on-the-go capture. Treat it as a deliberate "measure now" interaction, not ambient sensing.
-
-## Architecture (target shape — mirrors `neiry_kit`)
-
-The kit follows the standard Flutter-plugin layout (`lib/camera_ppg_kit.dart` barrel re-exporting a `lib/src/` tree, plus `lib/camera_ppg_kit_platform_interface.dart` / `_method_channel.dart` for native calls). Inside `lib/src/`, organize by role as Neiry does:
-
-- **`api/`** — the high-level Dart surface the host calls (start/stop a measurement session, subscribe to RR and quality streams, choose/override the camera).
-- **`models/`** — value types crossing the API boundary (RR interval, signal quality, finger-presence, measurement state, errors).
-- **`channel/`** — method/event-channel names and enums shared with native code.
-- **`processing/`** — any Dart-side signal handling the kit adds on top of `flutter_ppg` (e.g. session acceptance, outlier policy) — analogous to Neiry's `ppg_peak_detector.dart`.
-
-**Prior art to reuse:** `neiry_kit/lib/src/processing/ppg_peak_detector.dart` and `models/rr_interval.dart` already convert a raw PPG stream into RR intervals for the Neiry device. Read them before designing this kit's RR model and acceptance logic — keep the RR value type compatible so both sources feed the same host contract.
-
-## Proto / contract ownership
-
-This kit has **no proto contract** — it produces local biometric samples, not wire DTOs. The RR data only becomes a server concern inside `mind_mobile`'s `lib/Biometrics/` stream pipeline, which already owns that boundary. Do not add gRPC/proto here.
+- **No wrapped type crosses the barrel.** `PPGSignal` / `CameraImage` / `CameraController` never appear in a public signature — the API layer converts to `src/models/` types at the edge.
+- **Frame path:** camera → `FrameMessage` → `FrameIsolate` (off the UI isolate) → flutter_ppg → **de-halving → acceptance gate** → streams. De-halving runs *before* the gate.
+- **Teardown:** close the input `StreamController<CameraImage>` **before** cancelling the `PPGSignal` subscription — flutter_ppg's `async*` `processImageStream` deadlocks otherwise. Release is ordered and idempotent (`_release()`).
+- **One camera at a time.** The rear camera + torch cannot be opened concurrently; the auto-detect round-trip is sequential — the finger picks the lens, the kit locks the first covered sensor.
+- **RR + quality only.** The kit never emits BPM/HRV — the consumer derives them.
+- **FPS-sensitive.** Heavy UI work starves the frame stream; keep the frame path off the UI isolate and measure on a quiet screen.
 
 ## Commands
 
 ```bash
-# Run the example app on a real device (camera + torch are unavailable on simulators/emulators)
-flutter run
-
-# from the kit root, run the example explicitly:
-flutter run -t example/lib/main.dart
-
-# Tests
+flutter run                 # example on a connected real device (no camera/torch on simulators)
 flutter test
-
-# Add a dependency (never edit pubspec.yaml by hand)
-flutter pub add <package_name>
+flutter analyze
+flutter pub add <package>   # never hand-edit pubspec.yaml
 ```
 
-> Always use `flutter pub add` to add packages — never edit `pubspec.yaml` manually.
-> Use the full path `/usr/local/bin/flutter` when invoking Flutter from automation.
+## Documentation
 
-## Logging
+| Doc | What it covers |
+|---|---|
+| [README.md](README.md) | Overview, requirements, installation, running the example |
+| [docs/measurement.md](docs/measurement.md) | Session lifecycle, streams, RR intervals, errors |
+| [docs/camera-selection.md](docs/camera-selection.md) | Auto-detect round-trip, override, coverage, preview |
+| [docs/signal-processing.md](docs/signal-processing.md) | De-halving, acceptance gate, session policy |
+| [docs/device-support.md](docs/device-support.md) | Per-device hardware notes, tested devices, calibration |
+| [.ai-factory/ARCHITECTURE.md](.ai-factory/ARCHITECTURE.md) | Module structure, layers, dependency rules |
 
-This is a standalone plugin and does **not** depend on `mind_mobile`'s logger facade. Keep native/plugin logs minimal and behind a single internal helper (as Neiry does with `lib/src/util/nlog.dart`), so the host app's logging policy is not violated when the kit is embedded.
+## Language
 
-### Example-app logging style (our development convention)
-
-The example app is a hardware-debugging instrument, not a product UI — so it is logged aggressively and that is deliberate. When working in `example/`, follow these rules:
-
-- **Log every user interaction.** Every button, toggle, retry, and screen-to-screen navigation calls `ppgTap('<label>')` from its handler *before* doing the work. The goal is that the device log alone reconstructs the full sequence of what the tester did, in order — never guess what was pressed.
-- **Log lifecycle milestones, not every await.** Keep the coarse markers that bracket real async work: round-trip start and outcome, per-camera probe start + covered/not-covered result, runner start/stop. These are enough for normal debugging — do not leave a log on every internal await.
-- **Fine-grained step logging is a temporary diagnostic, removed once the bug is fixed.** Camera teardown awaits (`stopImageStream`, `dispose`, stream `close`, torch off) can hang on some devices (notably `camera_android_camerax`). When chasing such a hang, add a `N/total <step>…` log *before* each await so the device log pinpoints the step that never returned — then delete those step logs once the cause is found and fixed (as was done for the close-before-cancel teardown deadlock). Keep only the coarse milestone, not the scaffolding.
-- **One helper.** All example logs go through `ppgLog` / `ppgTap` in `example/lib/auto_detect/log.dart` (name `camera_ppg_example`, millisecond timestamps). Do not use `print` or `debugPrint`.
-
-This verbosity is scoped to the example app. The kit's own `lib/` code keeps logs minimal per the paragraph above.
-
-## Relationship to the rest of the monorepo
-
-- Lives beside `neiry_kit/` under `/Users/max/projects/mind/` as a **separate git repository**. Run git operations inside this directory, not from the monorepo root.
-- The monorepo root `.gitignore` ignores this folder (it is an independent repo).
-- It is **not yet** wired into the root `.ai-factory/` orchestration — keep planning/notes local to this repo for now.
+All files in this repo are written in English, regardless of conversation language.

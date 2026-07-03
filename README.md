@@ -45,7 +45,3 @@ This source emits RR intervals only — no heart-rate or HRV stream. `flutter_pp
 Tagging emitted intervals with a source identifier and registering this kit as one of several interchangeable heart-rate sources are both concerns of the consuming app, not this kit — `mind_mobile` owns that adapter layer entirely.
 
 The optional tuning constructor parameters on `CameraPpgSession`, and the `debugSignalStream` output, are `[debug]`-labelled extras used by this repository's own example app for live tuning and signal inspection. They are not part of the supported drop-in contract described above — a consumer should not construct or read them.
-
-## Documentation
-
-`CLAUDE.md` is the single source of truth for this repository. See also `.ai-factory/DESCRIPTION.md` for the specification and `.ai-factory/ARCHITECTURE.md` for the architecture and dependency rules.
