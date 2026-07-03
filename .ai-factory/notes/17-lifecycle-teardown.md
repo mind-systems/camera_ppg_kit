@@ -9,6 +9,7 @@
 - **The new failure neiry did not have: backgrounding.** The `camera` plugin loses the device when the app backgrounds, and Android reclaims it for other apps. We MUST release on `inactive`/`paused` and re-init on `resumed` via a `WidgetsBindingObserver` — neiry had no such lifecycle obligation because BLE survives background.
 - **Ordering is close-input-before-cancel-subscription, proven on hardware (note 03 spike).** `flutter_ppg`'s `processImageStream` is an `async*` generator parked on `await for (image in inputController.stream)`. Awaiting the `PPGSignal` subscription's `cancel()` while that input controller is still open **deadlocks** — the generator is suspended waiting for a frame that will never come (camera stopped) or for the input to close, so the cancel never unwinds (the A70 froze with the torch stuck on until this was fixed). Therefore: stop the image stream, **close the input `StreamController<CameraImage>` first** (ends the `await for`, the generator completes), *then* cancel the subscription (returns at once), then torch off and dispose. This is the load-bearing teardown invariant — neiry's "unregister callbacks before releasing the handle" rule, made specific to flutter_ppg's async generator.
 - **Split of responsibility:** the *ordered release* lives in `CameraPpgSession` (the reusable kit); the *WidgetsBindingObserver* lives in `example/` (it observes app lifecycle and calls into the session). The kit must not own a binding observer — the host decides lifecycle.
+- **Status:** the kit-side ordered `_release()`/`_tearDownHandles` is **already implemented** (notes 07/13 — close-before-cancel, routed through the frame isolate). The remaining work is the **example-side observer**, which under the neiry-mirror shell (note 22) sits at the app-shell level (`main.dart`) and releases the app-level `CameraPpgService` source, not a per-screen observer.
 
 ## Details
 
@@ -32,10 +33,10 @@ The example's `coverage_detector.dart` / `measurement_runner.dart` teardowns alr
 
 ### `example/` — `WidgetsBindingObserver`
 
-The playground screen's `State` mixes in `WidgetsBindingObserver`, registers in `initState` (`WidgetsBinding.instance.addObserver(this)`), removes in `dispose`. In `didChangeAppLifecycleState`:
+Under the neiry-mirror shell (note 22) the source is app-level (owned by the `CameraPpgService` singleton), so the observer sits on the **shell** `State` in `main.dart` — not a per-screen observer. It mixes in `WidgetsBindingObserver`, registers in `initState` (`WidgetsBinding.instance.addObserver(this)`), removes in `dispose`. In `didChangeAppLifecycleState`:
 
-- `AppLifecycleState.inactive` / `paused` → `session.stop()` (full ordered release; the camera is gone anyway).
-- `AppLifecycleState.resumed` → re-`start()` only if a measurement was active before backgrounding (track a `_wasMeasuring` flag), surfacing `MeasurementState` so the UI shows re-acquisition rather than a frozen preview.
+- `AppLifecycleState.inactive` / `paused` → `ref.read(cameraPpgServiceProvider).stopMeasurement()` (full ordered release; the camera is gone anyway).
+- `AppLifecycleState.resumed` → optionally re-arm if a measurement was active before backgrounding (a `_wasMeasuring` flag); otherwise the operator re-presses Start on the Source screen. Surface `MeasurementState` so the UI shows re-acquisition, not a frozen preview.
 
 **Hot-restart** is covered for free: hot-restart re-runs `main` and constructs a fresh session, but the OS still holds the old camera. The example must call `session.stop()`/release in `dispose`; rely additionally on the start-path acquiring the controller fresh each `start()` so a stale handle from a previous Dart VM is never reused.
 

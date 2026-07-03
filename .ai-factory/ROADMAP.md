@@ -57,18 +57,18 @@
 ---STOP---
 (calibration #1)
 
-> **CALIBRATION HANDOFF — finger needed.** Phases 3–7 are pure Dart + on-device verify and run straight through to here without calibration. Now the example's **Kit-API tab** exists, so the algorithm defaults borrowed from neiry's chest PPG must be tuned for camera PPG **against a reference pulse** (oximeter / chest strap / manual count): the RR-gate thresholds (note 12 — 300 ms floor, 40% consistency, cold-start, median window) and the session-policy windows (note 09 — warm-up, target duration, SQI floor). Report good numbers → they become the internal defaults before the API freeze (Phase 10). Resume Phases 8–10 after.
+> **CALIBRATION HANDOFF — finger needed.** Phases 3–7 run straight through to here without calibration. Now the example's **Calibration screen** exists (record a run on it; tune the knobs live on the **Source screen** — notes 21/22), so the algorithm defaults borrowed from neiry's chest PPG must be tuned for camera PPG **against a reference pulse** (manual count for now): the RR-gate thresholds (note 12 — 300 ms floor, 40% consistency, cold-start, median window) and the session-policy windows (note 09 — warm-up, SQI floor; **`targetDuration` is removed by note 23 and no longer tuned**). Report good numbers → they become the internal defaults before the API freeze (Phase 10). Resume Phases 8–10 after.
 
 ## Phase 8 — CameraPpgService singleton
 
-- [ ] **CameraPpgService device-layer singleton** — example-app composition root: a plain-Dart service (no Flutter/Riverpod/camera imports) owning one `CameraPpgSession` behind broadcast controllers kept open across stop/start, exposed via a Riverpod provider — mirrors neiry's `NeiryService` to avoid lazy-init bugs. Spec: `.ai-factory/notes/16-camera-ppg-service-singleton.md`.
+- [x] **CameraPpgService device-layer singleton** — example-app composition root: a plain-Dart service (no Flutter/Riverpod/camera imports) owning one `CameraPpgSession` behind broadcast controllers kept open across stop/start, exposed via a Riverpod provider — mirrors neiry's `NeiryService` to avoid lazy-init bugs. Implemented ahead of the marker as the example's foundation (`3ccd828`) and now the persistent source of the neiry-mirror shell (note 22). Spec: `.ai-factory/notes/16-camera-ppg-service-singleton.md`.
 
 ## Phase 9 — Plugin hardening
 
 > Hardens the lifecycle paths the spike and example surface.
 
-- [ ] **Lifecycle & teardown** — single ordered, idempotent `_release()` in `CameraPpgSession`: stop stream → close input bridge → cancel subscription → dispose service → torch off → dispose controller (the close-before-cancel order the spike proved; the naive reverse-of-start deadlocks). Release on dispose / background / hot-restart; the `WidgetsBindingObserver` lives in the example, not the kit. Spec: `.ai-factory/notes/17-lifecycle-teardown.md`.
-- [ ] **Permission / unsupported-device gating** — gate denied-permission and unsupported-device paths without crashes, surfacing `CameraPpgError` values; the deny/allow-list is a data-driven JSON asset keyed by model (sourced from note 03), not model strings in Dart. Acquire nothing on refusal. Spec: `.ai-factory/notes/18-permission-unsupported-gating.md`.
+- [ ] **Lifecycle & teardown** — the kit-side ordered, idempotent `_release()`/`_tearDownHandles` already exists in `CameraPpgSession` (notes 07/13 — close-before-cancel, routed through the frame isolate). Remaining: release on **background / hot-restart** via a `WidgetsBindingObserver` — under the neiry-mirror shell (note 22) it lives at the app-shell level in `main.dart` and releases the app-level `CameraPpgService` source (`stopMeasurement()`), not a per-screen observer. Spec: `.ai-factory/notes/17-lifecycle-teardown.md`.
+- [x] **Permission gating** — denied-permission fails cleanly as a value, never a crash: the example requests camera permission before `start()` (note 15), and if `start()` is reached without it the kit maps the `CameraException` to `CameraPpgError.permissionDenied` and acquires nothing. **Unsupported-device deny-list dropped** — no device is known-bad yet; plan it if/when one appears (the `CameraPpgErrorType.unsupportedDevice` value stays, harmless/unused). Spec: `.ai-factory/notes/18-permission-unsupported-gating.md`.
 
 ## Phase 10 — Integration readiness
 
