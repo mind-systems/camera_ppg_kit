@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:camera/camera.dart';
 import 'package:camera/camera.dart' as cam show availableCameras;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_ppg/flutter_ppg.dart' hide SignalQuality;
 
 import '../models/camera_ppg_camera_info.dart';
@@ -157,6 +158,22 @@ class CameraPpgSession {
   /// distinction) to render acceptance-gate guidance.
   Stream<FingerPresence> get fingerPresenceStream =>
       _fingerPresenceController.stream;
+
+  /// Live camera texture for the session's own locked controller, or `null`
+  /// when there is nothing to show.
+  ///
+  /// Reads the existing controller only — it never opens a second one (the
+  /// rear camera + torch cannot be opened twice, spec note 01) — so this
+  /// returns non-null only between lock and teardown: `null` while idle,
+  /// during the pre-lock auto-detect probe, and after [stop]/[dispose] null
+  /// out [_controller]. The returned [Widget] wraps [CameraPreview]
+  /// internally but the signature itself is a plain `package:flutter` type,
+  /// so no `camera`/`CameraController` type crosses this method.
+  Widget? buildPreview() {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return null;
+    return CameraPreview(controller);
+  }
 
   /// Pins the next [start] to the rear camera identified by [id] (one of the
   /// ids returned by [availableCameras]), skipping the signal-based

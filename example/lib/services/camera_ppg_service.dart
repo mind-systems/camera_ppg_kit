@@ -85,6 +85,13 @@ class CameraPpgService {
   /// Whether a measurement session is currently in flight.
   bool get isMeasuring => _measuring && _session != null;
 
+  /// Example-only accessor for the live preview surface (plan 25):
+  /// `null` while idle, a fresh instance per measurement while running. This
+  /// getter — not a `Widget? buildPreview()` on this service — is what keeps
+  /// this file's no-`flutter` invariant (see class dartdoc) intact; the
+  /// screen calls [CameraPpgSession.buildPreview] itself.
+  CameraPpgSession? get session => _session;
+
   void _checkNotDisposed() {
     if (_disposed) throw StateError('CameraPpgService has been disposed');
   }

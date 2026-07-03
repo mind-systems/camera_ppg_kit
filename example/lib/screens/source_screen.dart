@@ -137,6 +137,8 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
           ],
           _controlCard(lifecycle),
           const SizedBox(height: 16),
+          _previewCard(),
+          const SizedBox(height: 16),
           _signalCard(),
           const SizedBox(height: 16),
           _cameraOverrideCard(lifecycle != SourceLifecycle.idle),
@@ -224,6 +226,33 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  /// Boxed live camera texture for whatever sensor auto-detect (or the
+  /// override below) locked (plan 25) — the verification affordance letting
+  /// the operator *see* which lens locked and whether the finger fully
+  /// covers it.
+  ///
+  /// `buildPreview()` is read fresh on every build — never cached across a
+  /// stop — so the placeholder → live-texture flip rides the same
+  /// `ref.watch(lifecycleProvider)` rebuild already driving the rest of this
+  /// screen (`starting -> warmup` is the first rebuild where the session has
+  /// a locked, initialized controller); it naturally reverts to the
+  /// placeholder once `stop()`/`dispose()` null out the session's controller.
+  Widget _previewCard() {
+    final preview = ref.read(cameraPpgServiceProvider).session?.buildPreview();
+    return SectionCard(
+      title: 'Preview',
+      child: preview != null
+          ? ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: AspectRatio(
+                aspectRatio: 3 / 4,
+                child: preview,
+              ),
+            )
+          : const AsyncEmpty('no preview — start the source'),
     );
   }
 

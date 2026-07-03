@@ -16,6 +16,7 @@
 
 Enumerate exactly, asserting nothing else is exported from `lib/camera_ppg_kit.dart`:
 - `CameraPpgSession` (note 07) — `start()`/`stop()`/`dispose()`, `rrStream`, `qualityStream`, `stateStream`; plus the selection/override API (note 08): `availableCameras()`, `useCamera(id)`.
+- `CameraPpgSession.buildPreview() → Widget?` (plan 25) — a **deliberate post-freeze addition** (see Guards): returns a live camera-texture `Widget` for the session's own locked controller, or `null` when there is nothing to show (idle, pre-lock probe, or after `stop()`/`dispose()`). The return type is a plain `package:flutter` `Widget` — no `camera`/`CameraController` type crosses this method, consistent with the freeze's leaked-type pitfall above.
 - `RrInterval` (note 05) — shape-identical to neiry's `RRInterval` so the host's RR mixin binds both sources with one type.
 - `SignalQuality` + `fromSnr` (note 05).
 - `MeasurementState`, `FingerPresence`, `CameraPpgError` (note 06) — typed values, never thrown.
