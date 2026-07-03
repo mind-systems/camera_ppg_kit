@@ -32,7 +32,19 @@ flutter run            # run the example on a connected real device
 
 ## Status
 
-Early stage: the plugin is scaffolded and depends on `flutter_ppg` + `camera`; the Dart API surface and native camera-selection bridges are being built out. The intended public shape and boundaries are described in the architecture document.
+The Dart API exported from `package:camera_ppg_kit/camera_ppg_kit.dart` is frozen as the drop-in RR-interval source surface: the measurement session's streams and state machine, the camera-coverage UX (listing lenses, pinning one, previewing the live texture, reading which lens is active), and the exported model types. `mind_mobile` can depend on this shape with zero churn. Growing the surface after the freeze is a deliberate, consciously-made act, not an incidental one — see the architecture document for the boundary the barrel enforces and which extras are debug-only.
+
+## Consuming as a heart-rate source
+
+Import only the barrel, `package:camera_ppg_kit/camera_ppg_kit.dart` — nothing under `lib/src/` is a supported import.
+
+A `CameraPpgSession` exposes three broadcast streams a consumer subscribes to: RR intervals, a coarse signal-quality band, and the measurement's lifecycle state. The lifecycle moves `idle → warmup → measuring ⇄ poorSignal`, returning to `idle` once `stop()` is called; there is no terminal "done" state to wait for.
+
+This source emits RR intervals only — no heart-rate or HRV stream. `flutter_ppg`'s underlying signal exposes RR and nothing else; any BPM or HRV number is a derivative of the interval stream, so the consumer computes it downstream rather than reading it from the kit. When a finger lifts or the signal quality drops, the RR stream simply goes silent — no zero-value or placeholder ticks, no exception — so a host relying on a silence-window fallback (falling back to another sensor after a timeout with no new interval) sees exactly that: silence. `RrInterval.isArtifact` is the single channel for flagging an individual beat as untrustworthy; there is no separate error channel for artifacts.
+
+Tagging emitted intervals with a source identifier and registering this kit as one of several interchangeable heart-rate sources are both concerns of the consuming app, not this kit — `mind_mobile` owns that adapter layer entirely.
+
+The optional tuning constructor parameters on `CameraPpgSession`, and the `debugSignalStream` output, are `[debug]`-labelled extras used by this repository's own example app for live tuning and signal inspection. They are not part of the supported drop-in contract described above — a consumer should not construct or read them.
 
 ## Documentation
 

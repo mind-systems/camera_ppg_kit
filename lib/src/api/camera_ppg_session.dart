@@ -100,7 +100,9 @@ class CameraPpgSession {
 
   /// Current lifecycle state, driven tick-by-tick by [_policy] once a sensor
   /// locks: [MeasurementState.idle] when not running, then
-  /// `warmup → measuring ⇄ poorSignal → done` per [SessionPolicy].
+  /// `idle → warmup → measuring ⇄ poorSignal` per [SessionPolicy], returning
+  /// to `idle` on [stop]. There is no `done` terminal state —
+  /// [MeasurementState] defines only `idle, warmup, measuring, poorSignal`.
   MeasurementState _state = MeasurementState.idle;
 
   /// The lens [start] resolved and locked (auto-detect or pinned

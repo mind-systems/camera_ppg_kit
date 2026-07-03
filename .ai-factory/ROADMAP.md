@@ -96,7 +96,7 @@
 
 ## Phase 10 — Integration readiness
 
-- [ ] **Drop-in API freeze + docs** — finalize the barrel to match `mind_mobile`'s RR-interval source contract (tagged `camera_ppg`, preferred-with-fallback alongside worn sensors); enumerate the `[debug]` extras explicitly; consumer README/docs. The `lib/Biometrics/` adapter lives in `mind_mobile`, not here. Spec: `.ai-factory/notes/19-drop-in-api-freeze.md`.
+- [x] **Drop-in API freeze + docs** — finalize the barrel to match `mind_mobile`'s RR-interval source contract (tagged `camera_ppg`, preferred-with-fallback alongside worn sensors); enumerate the `[debug]` extras explicitly; consumer README/docs. The `lib/Biometrics/` adapter lives in `mind_mobile`, not here. Spec: `.ai-factory/notes/19-drop-in-api-freeze.md`. [10m 22s]
 
 ---STOP---
 (calibration #2)
