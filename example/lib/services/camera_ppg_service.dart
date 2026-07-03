@@ -137,6 +137,12 @@ class CameraPpgService {
   /// [CameraPpgSession.dispose] alone (not also `stop()`) is enough to
   /// release its camera + torch — calling both would just re-run the
   /// idempotent release for nothing.
+  ///
+  /// After teardown, this service emits a definitive terminal
+  /// [MeasurementState.idle] on its own long-lived [_stateController] rather
+  /// than relying on the disposed session's last emit reaching the UI — this
+  /// is what returns the UI to Idle and clears stale BPM via the state
+  /// cascade.
   Future<void> stopMeasurement() async {
     final session = _session;
     if (session == null) {
@@ -150,6 +156,12 @@ class CameraPpgService {
     _session = null;
     _measuring = false;
     await session.dispose();
+    // Push a definitive terminal idle ourselves rather than relying on the
+    // session's last emit reaching the UI through the just-cancelled bridge
+    // subscription above — see dartdoc.
+    if (!_stateController.isClosed) {
+      _stateController.add(MeasurementState.idle);
+    }
   }
 
   /// Enumerates rear-facing cameras for the override UI, without a running
