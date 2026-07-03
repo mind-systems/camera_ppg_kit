@@ -232,30 +232,21 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   /// Kit-API keeps an identical copy (Scope notes) — deliberately not
   /// factored into a shared widget.
   ///
-  /// Top row is the SQI chip beside a small square live-camera preview (plan
-  /// 27, folding in note 35's standalone preview card); `Finger` stays its
-  /// own row below, unchanged.
+  /// Full-width SQI chip followed by the `Finger` row — the live-camera
+  /// preview square that used to sit beside the chip has moved into
+  /// `_cameraOverrideCard()`, shrunk to a fixed square (plan 28); this card
+  /// no longer renders any preview.
   ///
-  /// Both the SQI side and the preview square are gated on `lifecycle`, not
-  /// on the last stream/session value: while `!lifecycle.isActive` (`idle`,
-  /// `starting`, `stopping`) they always show "waiting for signal…" /
-  /// placeholder, even if `qualityProvider` or the session still hold a
+  /// The SQI side is gated on `lifecycle`, not on the last stream value:
+  /// while `!lifecycle.isActive` (`idle`, `starting`, `stopping`) it always
+  /// shows "waiting for signal…", even if `qualityProvider` still holds a
   /// stale last value from before Stop. Only while `lifecycle.isActive`
-  /// (`warmup`/`measuring`/`poorSignal`) do they render the live values:
-  ///
-  /// - SQI: `qualityProvider` is a `StreamProvider` that sits in the
-  ///   `loading` state (not a null-data state) until its first emit, so the
-  ///   chip is gated on the `AsyncValue` itself: `loading` renders
-  ///   `AsyncEmpty` ("waiting for signal…"), `data` renders the
-  ///   `StatusChip`, `error` renders `AsyncError`.
-  /// - Preview: `buildPreview()` is read fresh on every build — never cached
-  ///   across a stop — so the placeholder → live-texture flip rides the same
-  ///   `ref.watch(lifecycleProvider)` rebuild already driving the rest of
-  ///   this screen (`starting -> warmup` is the first rebuild where the
-  ///   session has a locked, initialized controller); it naturally reverts
-  ///   to the placeholder once `stop()`/`dispose()` null out the session's
-  ///   controller, and the `lifecycle` gate above forces that reversion the
-  ///   instant Stop is pressed rather than waiting on the last emit.
+  /// (`warmup`/`measuring`/`poorSignal`) does it render the live value:
+  /// `qualityProvider` is a `StreamProvider` that sits in the `loading`
+  /// state (not a null-data state) until its first emit, so the chip is
+  /// gated on the `AsyncValue` itself: `loading` renders `AsyncEmpty`
+  /// ("waiting for signal…"), `data` renders the `StatusChip`, `error`
+  /// renders `AsyncError`.
   ///
   /// Finger-presence has no live-source ambiguity in practice worth a
   /// spinner, so it stays a plain `LabelRow` reusing the existing
@@ -272,37 +263,18 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
       null => 'unknown',
     };
 
-    final preview = active ? ref.read(cameraPpgServiceProvider).session?.buildPreview() : null;
-
     return SectionCard(
       title: 'Signal',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: !active
-                    ? const AsyncEmpty('waiting for signal…')
-                    : qualityAsync.when(
-                        data: (quality) => StatusChip('SQI: ${quality.name}', qualityColor(quality)),
-                        loading: () => const AsyncEmpty('waiting for signal…'),
-                        error: (error, _) => AsyncError(error),
-                      ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: AspectRatio(
-                  aspectRatio: 1,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: preview ?? const AsyncEmpty('no preview'),
-                  ),
+          !active
+              ? const AsyncEmpty('waiting for signal…')
+              : qualityAsync.when(
+                  data: (quality) => StatusChip('SQI: ${quality.name}', qualityColor(quality)),
+                  loading: () => const AsyncEmpty('waiting for signal…'),
+                  error: (error, _) => AsyncError(error),
                 ),
-              ),
-            ],
-          ),
           const SizedBox(height: 8),
           LabelRow('Finger', presenceLabel),
         ],
@@ -319,16 +291,25 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   ///
   /// Also shows which sensor auto-detect (or the pin) actually locked, read
   /// fresh off the session's `resolvedCamera` (plan 26) — the text
-  /// complement to `_signalCard()`'s live preview square, so camera selection
-  /// is verifiable without reading pixels. Read directly rather than through
-  /// a stream provider: this rides the same `ref.watch(lifecycleProvider)`
-  /// rebuild `_signalCard()` already relies on, so no extra wiring is
-  /// needed. The transient `'auto-detecting…'` text is gated on
-  /// [SourceLifecycle.starting] specifically, not on "locked but
+  /// complement to the live preview square beside Refresh (plan 28 moved it
+  /// in from `_signalCard()`, shrunk to a fixed ~100 px square so it
+  /// coexists with Refresh instead of dominating the card), so camera
+  /// selection is verifiable without reading pixels. Read directly rather
+  /// than through a stream provider: this rides the same
+  /// `ref.watch(lifecycleProvider)` rebuild already driving this screen, so
+  /// no extra wiring is needed. The transient `'auto-detecting…'` text is
+  /// gated on [SourceLifecycle.starting] specifically, not on "locked but
   /// unresolved" in general — `stopMeasurement()` nulls the service's
   /// session before awaiting `dispose()`, so `resolvedCamera` also reads
   /// `null` during `stopping`; without this gate that sub-second teardown
   /// window would misleadingly read "auto-detecting…" (review finding 1).
+  ///
+  /// The preview square is read fresh via `ref.read(...).session
+  /// ?.buildPreview()` on every build — never cached across a stop — and
+  /// gated on `lifecycle.isActive` exactly as it was when it lived in
+  /// `_signalCard()`: a live texture only in `warmup`/`measuring`/
+  /// `poorSignal`, reverting to the `'no preview'` placeholder the instant
+  /// Stop is pressed (note 33 lifecycle gate, note 38 blank-on-Stop).
   Widget _cameraOverrideCard(SourceLifecycle lifecycle) {
     final locked = lifecycle != SourceLifecycle.idle;
     final resolved = ref.read(cameraPpgServiceProvider).session?.resolvedCamera;
@@ -337,29 +318,45 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
         : lifecycle == SourceLifecycle.starting
             ? 'auto-detecting…'
             : '—';
+    final active = lifecycle.isActive;
+    final preview = active ? ref.read(cameraPpgServiceProvider).session?.buildPreview() : null;
     return SectionCard(
       title: 'Camera override',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (_loadingCameras)
-                const SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              else
-                TextButton(
-                  onPressed: locked
-                      ? null
-                      : () {
-                          ppgTap('source_refresh_cameras');
-                          _loadCameras();
-                        },
-                  child: const Text('Refresh'),
+              Expanded(
+                child: _loadingCameras
+                    ? const Align(
+                        alignment: Alignment.centerLeft,
+                        child: SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : TextButton(
+                        onPressed: locked
+                            ? null
+                            : () {
+                                ppgTap('source_refresh_cameras');
+                                _loadCameras();
+                              },
+                        child: const Text('Refresh'),
+                      ),
+              ),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 100,
+                height: 100,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: preview ?? const AsyncEmpty('no preview'),
                 ),
+              ),
             ],
           ),
           DropdownButton<String?>(
