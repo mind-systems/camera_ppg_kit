@@ -4,7 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/stream_providers.dart';
 
-/// Kit-API branch — dogfoods the kit's **public barrel only** (spec note
+/// Streams screen — dogfoods the kit's **public barrel only** (spec note
 /// 14).
 ///
 /// Imports only `package:camera_ppg_kit/camera_ppg_kit.dart` — no
@@ -18,14 +18,14 @@ import '../providers/stream_providers.dart';
 /// no `startMeasurement`/`stopMeasurement` — those moved to the Source
 /// screen, the shell's sole owner of the source lifecycle. Stays a
 /// `ConsumerStatefulWidget` solely for the `_rrHistory` UI-only rolling list.
-class KitApiTab extends ConsumerStatefulWidget {
-  const KitApiTab({super.key});
+class StreamsScreen extends ConsumerStatefulWidget {
+  const StreamsScreen({super.key});
 
   @override
-  ConsumerState<KitApiTab> createState() => _KitApiTabState();
+  ConsumerState<StreamsScreen> createState() => _StreamsScreenState();
 }
 
-class _KitApiTabState extends ConsumerState<KitApiTab> {
+class _StreamsScreenState extends ConsumerState<StreamsScreen> {
   // ── RR rolling list (display-only, cleared on every new warm-up) ───────
   final List<RrInterval> _rrHistory = [];
 

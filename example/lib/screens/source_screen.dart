@@ -15,7 +15,7 @@ import '../providers/stream_providers.dart';
 /// the session across navigation (the shell keeps every branch mounted).
 ///
 /// Carries the camera-permission flow, camera override, and the `[debug]`
-/// tuning panel — all relocated here from `kit_api_tab.dart` (Task 4 strips
+/// tuning panel — all relocated here from `streams_screen.dart` (Task 4 strips
 /// them there). The tuning panel seeds from and writes to
 /// [sessionConfigProvider] so the config it starts with is always the same
 /// one the future calibration screen will read (note 21).
@@ -45,7 +45,7 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
     // pass, and `_loadCameras`'s synchronous pre-await `setState()` can trip
     // a "setState() called during build" assertion if it runs inline from
     // `initState` in that window. A post-frame callback runs it once the
-    // current build/layout has finished instead (mirrors kit_api_tab).
+    // current build/layout has finished instead (mirrors streams_screen).
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadCameras());
   }
 
@@ -370,7 +370,7 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   }
 
   /// Value-keyed re-seed pattern (must carry over unchanged from
-  /// `kit_api_tab.dart`): `key: ValueKey('$label-$value')` bound to the
+  /// `streams_screen.dart`): `key: ValueKey('$label-$value')` bound to the
   /// *provider-derived* value + `initialValue: value.toString()`, so submit
   /// → notifier write → rebuild → new key → new `initialValue` re-seeds the
   /// field to the round-tripped provider value. A plain `initialValue`

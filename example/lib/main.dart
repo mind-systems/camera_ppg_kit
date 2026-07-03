@@ -5,7 +5,7 @@ import 'auto_detect/auto_detect_screen.dart';
 import 'auto_detect/log.dart';
 import 'providers/camera_ppg_service_provider.dart';
 import 'screens/calibration_screen.dart';
-import 'screens/kit_api_tab.dart';
+import 'screens/streams_screen.dart';
 import 'screens/source_screen.dart';
 
 void main() {
@@ -38,7 +38,7 @@ class CameraPpgKitExampleApp extends StatelessWidget {
 /// index-shift-safe change.
 enum _Branch {
   source('Source'),
-  kitApi('Kit API'),
+  streams('Streams'),
   calibration('Calibration'),
   raw('Raw');
 
@@ -55,12 +55,12 @@ enum _Branch {
 /// positional edit to a separate hardcoded widget list.
 Widget _screenFor(_Branch branch) => switch (branch) {
       _Branch.source => const SourceScreen(),
-      _Branch.kitApi => const KitApiTab(),
+      _Branch.streams => const StreamsScreen(),
       _Branch.calibration => const CalibrationScreen(),
       _Branch.raw => const AutoDetectScreen(),
     };
 
-/// All-mounted shell: **Source** (the sole Start/Stop control), **Kit API**
+/// All-mounted shell: **Source** (the sole Start/Stop control), **Streams**
 /// (pure consumer), and **Raw** (direct `flutter_ppg`/`camera` — the
 /// existing Phase-2 panels, unchanged) — spec note 22.
 ///
