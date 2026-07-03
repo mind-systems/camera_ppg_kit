@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 // kit's `AsyncError` (async_states.dart) — hide riverpod's so the kit's wins.
 import 'package:flutter_riverpod/flutter_riverpod.dart' hide AsyncError;
 
+import '../common/fps_meter.dart';
 import '../providers/stream_providers.dart';
 import '../services/source_lifecycle.dart';
 import '../widgets/widgets.dart';
@@ -33,6 +34,9 @@ class _StreamsScreenState extends ConsumerState<StreamsScreen> {
   // ── RR rolling list (display-only, cleared on every new warm-up) ───────
   final List<RrInterval> _rrHistory = [];
 
+  // ── Motion sample-rate readout (display-only rolling window) ───────────
+  final FpsMeter _motionMeter = FpsMeter();
+
   @override
   Widget build(BuildContext context) {
     // Providers, not raw streams — a rebuild here re-reads provider state,
@@ -55,6 +59,16 @@ class _StreamsScreenState extends ConsumerState<StreamsScreen> {
         }
       });
     });
+    ref.listen<AsyncValue<MotionSample>>(motionProvider, (previous, next) {
+      // `DateTime.now()` — not `sample.timestamp` — because `FpsMeter.fps`
+      // prunes its window against `DateTime.now()` and `MotionSample.timestamp`
+      // is an explicitly non-monotonic device clock; mixing the two clock
+      // domains would corrupt the rolling-window Hz reading.
+      next.whenData((sample) {
+        _motionMeter.record(DateTime.now());
+        setState(() {});
+      });
+    });
 
     final lifecycle = ref.watch(lifecycleProvider).value ?? SourceLifecycle.idle;
     final (label, color) = _stateLabelColor(lifecycle);
@@ -70,6 +84,8 @@ class _StreamsScreenState extends ConsumerState<StreamsScreen> {
           _rrCard(),
           const SizedBox(height: 16),
           _signalCard(),
+          const SizedBox(height: 16),
+          _motionCard(),
         ],
       ),
     );
@@ -184,6 +200,38 @@ class _StreamsScreenState extends ConsumerState<StreamsScreen> {
           const SizedBox(height: 8),
           LabelRow('Finger', presenceLabel),
         ],
+      ),
+    );
+  }
+
+  /// Raw accel/gyro passthrough (spec note 31) plus a live sample-rate (Hz)
+  /// readout, so a developer can watch the actual device throughput and
+  /// decide whether throttling is warranted. Consumer-only — no
+  /// interpretation of the values happens here.
+  Widget _motionCard() {
+    final motionAsync = ref.watch(motionProvider);
+
+    return SectionCard(
+      title: 'Motion',
+      child: motionAsync.when(
+        data: (sample) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            MetricRow('Accel X', sample.accelX, unit: 'm/s²', mono: true),
+            MetricRow('Accel Y', sample.accelY, unit: 'm/s²', mono: true),
+            MetricRow('Accel Z', sample.accelZ, unit: 'm/s²', mono: true),
+            MetricRow('Gyro X', sample.gyroX, unit: 'rad/s', mono: true),
+            MetricRow('Gyro Y', sample.gyroY, unit: 'rad/s', mono: true),
+            MetricRow('Gyro Z', sample.gyroZ, unit: 'rad/s', mono: true),
+            const SizedBox(height: 8),
+            Text(
+              '${_motionMeter.fps.toStringAsFixed(1)} Hz',
+              style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        loading: () => const AsyncEmpty('waiting for signal…'),
+        error: (error, _) => AsyncError(error),
       ),
     );
   }

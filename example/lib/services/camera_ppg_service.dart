@@ -30,13 +30,15 @@ class CameraPpgService {
         _stateController = StreamController<MeasurementState>.broadcast(),
         _fingerPresenceController =
             StreamController<FingerPresence>.broadcast(),
-        _lifecycleController = StreamController<SourceLifecycle>.broadcast();
+        _lifecycleController = StreamController<SourceLifecycle>.broadcast(),
+        _motionController = StreamController<MotionSample>.broadcast();
 
   final StreamController<RrInterval> _rrController;
   final StreamController<SignalQuality> _qualityController;
   final StreamController<MeasurementState> _stateController;
   final StreamController<FingerPresence> _fingerPresenceController;
   final StreamController<SourceLifecycle> _lifecycleController;
+  final StreamController<MotionSample> _motionController;
 
   /// Current lifecycle value — see [lifecycleStream]. The single source of
   /// truth for "what the source is doing right now" (spec note 33).
@@ -81,6 +83,10 @@ class CameraPpgService {
   /// derivation off the kit's [MeasurementState]. Stays open across
   /// stop/start cycles.
   Stream<SourceLifecycle> get lifecycleStream => _lifecycleController.stream;
+
+  /// Broadcast stream of raw device-motion samples (accel + gyro). Stays
+  /// open across stop/start cycles.
+  Stream<MotionSample> get motionStream => _motionController.stream;
 
   /// Whether a measurement session is currently in flight.
   bool get isMeasuring => _measuring && _session != null;
@@ -155,6 +161,7 @@ class CameraPpgService {
         _fingerPresenceController.add,
         onError: _fingerPresenceController.addError,
       ),
+      session.motionStream.listen(_motionController.add, onError: _motionController.addError),
     ]);
 
     final error = await session.start();
@@ -267,5 +274,6 @@ class CameraPpgService {
     await _stateController.close();
     await _fingerPresenceController.close();
     await _lifecycleController.close();
+    await _motionController.close();
   }
 }

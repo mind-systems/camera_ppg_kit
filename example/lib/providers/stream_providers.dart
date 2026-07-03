@@ -35,6 +35,12 @@ final lifecycleProvider = StreamProvider<SourceLifecycle>((ref) {
   return ref.watch(cameraPpgServiceProvider).lifecycleStream;
 });
 
+/// Raw device-motion passthrough (accel/gyro) — interpretation is left to
+/// the consumer.
+final motionProvider = StreamProvider<MotionSample>((ref) {
+  return ref.watch(cameraPpgServiceProvider).motionStream;
+});
+
 /// Display-only derived BPM — never pushed into the kit (BPM/HRV are the
 /// consumer's concern, spec note 07).
 ///
