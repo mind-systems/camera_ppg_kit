@@ -26,6 +26,7 @@ idle → warmup → measuring ⇄ poorSignal
 | `stateStream` | `MeasurementState` transitions |
 | `fingerPresenceStream` | `FingerPresence` — `present` / `absent` / `overBright` |
 | `resolvedCameraStream` | `CameraPpgCameraInfo?` — which lens is active, or `null` when none |
+| `motionStream` | `MotionSample { accelX/Y/Z, gyroX/Y/Z, timestamp }` — raw accelerometer (m/s², gravity included) + gyroscope (rad/s), emitted only while a measurement is active; decoupled from the PPG signal — not a quality input |
 
 `buildPreview()` returns a live camera-texture `Widget?` for the active lens (or `null` when nothing is streaming), so a UI can show what the camera sees.
 

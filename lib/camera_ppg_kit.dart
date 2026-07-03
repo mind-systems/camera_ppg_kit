@@ -14,6 +14,10 @@ export 'src/models/signal_quality.dart';
 export 'src/models/measurement_state.dart';
 export 'src/models/finger_presence.dart';
 export 'src/models/camera_ppg_error.dart';
+// `motionStream` (spec note 31) — a raw accel+gyro stream distinct from the
+// RR/quality path above, reached via the already-exported CameraPpgSession.
+// `MotionReader`/`src/motion/` stay internal; only the model crosses.
+export 'src/models/motion_sample.dart';
 
 // `[debug]` extras: present in the public API but NOT part of the frozen
 // consumer contract above — `mind_mobile` always omits both. They exist so

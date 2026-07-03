@@ -29,6 +29,7 @@ camera_ppg_kit/
 │       │   └── camera_ppg_error.dart        # typed error/state values (no throwing across the channel)
 │       ├── channel/                         # method/event-channel names + shared enums
 │       ├── processing/                      # acceptance / outlier policy layered on flutter_ppg (cf. neiry's ppg_peak_detector)
+│       ├── motion/                          # raw accel+gyro reader (sensors_plus), decoupled from the PPG signal path
 │       └── util/                            # internal logging helper (cf. neiry's nlog.dart)
 ├── android/                                 # Kotlin plugin — torch fallback only if needed (deletion candidate)
 ├── ios/                                     # Swift plugin — torch fallback only if needed (deletion candidate)
@@ -42,6 +43,7 @@ camera_ppg_kit/
 - ✅ `src/api/` → depends on `src/models/`, `src/channel/`, `src/processing/`, `src/util/`, and on `flutter_ppg` / `camera`.
 - ✅ `src/processing/` → depends on `src/models/` only (pure Dart signal/acceptance logic; no `camera`/channel imports). **Deliberate sole exception:** `src/processing/frame_isolate.dart` imports `camera` + `flutter_ppg` — it is the isolate-boundary host (spawns the long-lived background isolate, runs `FlutterPPGService` inside it, adapts `CameraImage` <-> the sendable `FrameMessage`/`SignalMessage` types in `frame_message.dart`), not general signal/acceptance logic. `frame_message.dart` itself stays pure (`dart:typed_data` + `dart:isolate` only). The `CameraController` wiring stays in `src/api/` per spec note 13.
 - ✅ `src/models/` → pure value types; depend on nothing else in the kit.
+- ✅ `src/motion/` → depends on `src/models/` only (`MotionSample`) plus `sensors_plus`; no `camera`/`flutter_ppg`/channel imports. Never exported from the barrel itself — only its output model (`MotionSample`) crosses; `motionStream` is reached via `CameraPpgSession`.
 - ✅ Native (`android/`, `ios/`) → communicate with Dart **only** through the names declared in `src/channel/`.
 - ❌ Consumers (incl. `mind_mobile`) importing anything under `lib/src/` directly — they use the barrel only.
 - ❌ Any kit file importing from `mind_mobile` or the app logger facade.

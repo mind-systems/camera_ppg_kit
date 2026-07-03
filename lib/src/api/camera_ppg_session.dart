@@ -10,8 +10,10 @@ import '../models/camera_ppg_camera_info.dart';
 import '../models/camera_ppg_error.dart';
 import '../models/finger_presence.dart';
 import '../models/measurement_state.dart';
+import '../models/motion_sample.dart';
 import '../models/rr_interval.dart';
 import '../models/signal_quality.dart';
+import '../motion/motion_reader.dart';
 import '../processing/frame_isolate.dart';
 import '../processing/frame_message.dart';
 import '../processing/rr_acceptance.dart';
@@ -61,6 +63,7 @@ class CameraPpgSession {
             StreamController<FingerPresence>.broadcast(),
         _resolvedCameraController =
             StreamController<CameraPpgCameraInfo?>.broadcast(),
+        _motionController = StreamController<MotionSample>.broadcast(),
         _policy = policy ?? SessionPolicy(),
         _acceptance = acceptance ?? RrAcceptance(),
         _dehalving = dehalving ?? RrDehalving();
@@ -71,6 +74,7 @@ class CameraPpgSession {
   final StreamController<List<double>> _debugSignalController;
   final StreamController<FingerPresence> _fingerPresenceController;
   final StreamController<CameraPpgCameraInfo?> _resolvedCameraController;
+  final StreamController<MotionSample> _motionController;
 
   /// Warm-up/duration/acceptance policy (spec note 09) that drives [_state]
   /// once a sensor is locked. Constructor-injectable so the example's
@@ -137,6 +141,15 @@ class CameraPpgSession {
   FrameIsolate? _frameIsolate;
   StreamSubscription<SignalMessage>? _sub;
 
+  /// Raw motion source (spec note 31), started/stopped alongside the camera
+  /// lock — independent of the PPG signal/quality path. Not part of the
+  /// shared [_tearDownHandles] camera ordering; torn down directly in
+  /// [_release].
+  MotionReader? _motionReader;
+
+  /// Forwards [_motionReader]'s `samples` into [_motionController].
+  StreamSubscription<MotionSample>? _motionSub;
+
   /// Last-seen `PPGSignal.rrIntervals` window, used to diff out only the
   /// newly-produced interval(s) on each signal (see [rr_diff.dart]).
   List<double> _lastRrIntervals = const [];
@@ -168,6 +181,15 @@ class CameraPpgSession {
   /// distinction) to render acceptance-gate guidance.
   Stream<FingerPresence> get fingerPresenceStream =>
       _fingerPresenceController.stream;
+
+  /// Broadcast stream of raw accelerometer + gyroscope [MotionSample]s,
+  /// emitted only while a measurement is active (started/stopped alongside
+  /// the camera lock).
+  ///
+  /// Fully decoupled from the PPG signal/quality path — this is a raw
+  /// passthrough off the device's own sensors, not derived from and never
+  /// fed back into [rrStream]/[qualityStream]/the acceptance gate.
+  Stream<MotionSample> get motionStream => _motionController.stream;
 
   /// The lens [start] resolved and locked, or `null`.
   ///
@@ -394,6 +416,17 @@ class CameraPpgSession {
         _stopwatch
           ..reset()
           ..start();
+
+        // Raw motion stream (spec note 31) — started alongside the sensor
+        // lock, fully independent of the PPG signal path above. Kept
+        // synchronous (no `await`) so no `stale()` gap opens here.
+        final motionReader = MotionReader();
+        _motionReader = motionReader;
+        motionReader.start();
+        _motionSub = motionReader.samples.listen((s) {
+          if (!_motionController.isClosed) _motionController.add(s);
+        });
+
         _setResolvedCamera(_toCameraInfo(description));
         _setState(MeasurementState.warmup);
         lockedAndStreaming = true;
@@ -451,6 +484,7 @@ class CameraPpgSession {
     await _debugSignalController.close();
     await _fingerPresenceController.close();
     await _resolvedCameraController.close();
+    await _motionController.close();
   }
 
   /// Single ordered, idempotent teardown used by [stop], [dispose], and
@@ -473,10 +507,14 @@ class CameraPpgSession {
     final controller = _controller;
     final frameIsolate = _frameIsolate;
     final sub = _sub;
+    final motionReader = _motionReader;
+    final motionSub = _motionSub;
 
     _controller = null;
     _frameIsolate = null;
     _sub = null;
+    _motionReader = null;
+    _motionSub = null;
     _running = false;
     // Invalidates any in-flight `start()` still suspended on an `await` —
     // see [_generation]'s doc (review Finding 1).
@@ -491,6 +529,14 @@ class CameraPpgSession {
       frameIsolate: frameIsolate,
       signalSub: sub,
     );
+
+    // Motion is independent of the camera/frame path — torn down directly
+    // rather than through [_tearDownHandles]'s shared camera ordering.
+    // [MotionReader.dispose] also closes its own `samples` controller, so
+    // this forwarding subscription is never left stranded across
+    // start()/stop() cycles.
+    await motionSub?.cancel();
+    await motionReader?.dispose();
 
     _setState(MeasurementState.idle);
     nlog('session released');
