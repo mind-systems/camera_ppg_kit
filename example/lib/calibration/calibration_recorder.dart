@@ -28,20 +28,14 @@ class CalibrationRecorder {
 
   final List<Map<String, Object?>> _records = [];
   SignalQuality _latestQuality = SignalQuality.poor;
-  bool _done = false;
-
-  /// Whether the observed session has reached [MeasurementState.done] —
-  /// i.e. the buffer is finalized and [save] can be called.
-  bool get isDone => _done;
 
   StreamSubscription<RrInterval>? _rrSub;
   StreamSubscription<SignalQuality>? _qualitySub;
-  StreamSubscription<MeasurementState>? _stateSub;
 
-  /// Starts capturing a new run: resets buffers/flags, records the effective
-  /// run params, and subscribes to [service]'s `rrStream`/`qualityStream`/
-  /// `stateStream`. Call this at the same moment [service].startMeasurement
-  /// is called, passing the same [acceptance]/[policy] instances.
+  /// Starts capturing a new run: resets buffers, records the effective run
+  /// params, and subscribes to [service]'s `rrStream`/`qualityStream`. Call
+  /// this at the same moment [service].startMeasurement is called, passing
+  /// the same [acceptance]/[policy] instances.
   void start(
     CameraPpgService service,
     RrAcceptance acceptance,
@@ -55,7 +49,6 @@ class CalibrationRecorder {
 
     _records.clear();
     _latestQuality = SignalQuality.poor;
-    _done = false;
 
     _acceptance = acceptance;
     _policy = policy;
@@ -78,13 +71,6 @@ class CalibrationRecorder {
         'sqi': _latestQuality.name,
       });
     });
-
-    _stateSub = service.stateStream.listen((state) {
-      if (state == MeasurementState.done) {
-        _stopwatch.stop();
-        _done = true;
-      }
-    });
   }
 
   /// Cancels the stream subscriptions and stops the clock, keeping the
@@ -93,10 +79,8 @@ class CalibrationRecorder {
   void stop() {
     _rrSub?.cancel();
     _qualitySub?.cancel();
-    _stateSub?.cancel();
     _rrSub = null;
     _qualitySub = null;
-    _stateSub = null;
     if (_stopwatch.isRunning) {
       _stopwatch.stop();
     }
@@ -141,7 +125,6 @@ class CalibrationRecorder {
       },
       'policy': {
         'warmupMs': policy.warmupDuration.inMilliseconds,
-        'targetMs': policy.targetDuration.inMilliseconds,
         'silenceMs': policy.silenceWindow.inMilliseconds,
         'sqiFloor': policy.sqiFloor.name,
       },

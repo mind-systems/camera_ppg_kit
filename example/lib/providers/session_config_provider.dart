@@ -42,19 +42,6 @@ class SessionConfigNotifier extends Notifier<SessionConfig> {
     state = state.copyWith(
       policy: SessionPolicy(
         warmupDuration: Duration(seconds: seconds),
-        targetDuration: p.targetDuration,
-        silenceWindow: p.silenceWindow,
-        sqiFloor: p.sqiFloor,
-      ),
-    );
-  }
-
-  void setTargetSeconds(int seconds) {
-    final p = state.policy;
-    state = state.copyWith(
-      policy: SessionPolicy(
-        warmupDuration: p.warmupDuration,
-        targetDuration: Duration(seconds: seconds),
         silenceWindow: p.silenceWindow,
         sqiFloor: p.sqiFloor,
       ),
@@ -66,7 +53,6 @@ class SessionConfigNotifier extends Notifier<SessionConfig> {
     state = state.copyWith(
       policy: SessionPolicy(
         warmupDuration: p.warmupDuration,
-        targetDuration: p.targetDuration,
         silenceWindow: Duration(seconds: seconds),
         sqiFloor: p.sqiFloor,
       ),
@@ -78,7 +64,6 @@ class SessionConfigNotifier extends Notifier<SessionConfig> {
     state = state.copyWith(
       policy: SessionPolicy(
         warmupDuration: p.warmupDuration,
-        targetDuration: p.targetDuration,
         silenceWindow: p.silenceWindow,
         sqiFloor: sqiFloor,
       ),

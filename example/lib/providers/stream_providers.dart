@@ -16,7 +16,7 @@ final qualityProvider = StreamProvider<SignalQuality>((ref) {
 });
 
 /// Measurement lifecycle state — render this directly, never reimplement the
-/// warm-up/measuring/poorSignal/done state machine (that is the kit's, spec
+/// warm-up/measuring/poorSignal state machine (that is the kit's, spec
 /// note 09).
 final stateProvider = StreamProvider<MeasurementState>((ref) {
   return ref.watch(cameraPpgServiceProvider).stateStream;
@@ -38,9 +38,9 @@ final fingerPresenceProvider = StreamProvider<FingerPresence>((ref) {
 /// retains the BPM derived from the last accepted beat across intervening
 /// artifact ticks (through [MeasurementState.measuring] and
 /// [MeasurementState.poorSignal] alike), resetting to `null` whenever the
-/// state isn't actively trusting RR — `idle`/`done` (no live signal to
-/// display) and `warmup` (a new measurement has begun; discard the previous
-/// one's BPM before its first RR arrives) — per review finding 3.
+/// state isn't actively trusting RR — `idle` (no live signal to display) and
+/// `warmup` (a new measurement has begun; discard the previous one's BPM
+/// before its first RR arrives) — per review finding 3.
 class BpmNotifier extends Notifier<int?> {
   @override
   int? build() {
@@ -58,7 +58,6 @@ class BpmNotifier extends Notifier<int?> {
       switch (s) {
         case MeasurementState.idle:
         case MeasurementState.warmup:
-        case MeasurementState.done:
           state = null;
         case MeasurementState.measuring:
         case MeasurementState.poorSignal:

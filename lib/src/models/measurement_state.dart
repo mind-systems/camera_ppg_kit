@@ -13,10 +13,6 @@ enum MeasurementState {
   /// Warm-up has completed and the kit is emitting trusted RR intervals.
   measuring,
 
-  /// The target measurement duration has been reached and the session
-  /// has ended normally.
-  done,
-
   /// Signal or finger-presence quality is failing the acceptance gate;
   /// RR intervals should not be trusted until the state recovers.
   poorSignal,

@@ -234,7 +234,6 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
           MeasurementState.warmup => ('Warming up', Colors.blue),
           MeasurementState.measuring => ('Measuring', Colors.green),
           MeasurementState.poorSignal => ('Poor signal', Colors.orange),
-          MeasurementState.done => ('Complete', Colors.indigo),
         };
 
         return Row(

@@ -55,12 +55,11 @@ void main() {
   });
 
   group('MeasurementState', () {
-    test('has exactly the five expected lifecycle values', () {
+    test('has exactly the four expected lifecycle values', () {
       expect(MeasurementState.values, [
         MeasurementState.idle,
         MeasurementState.warmup,
         MeasurementState.measuring,
-        MeasurementState.done,
         MeasurementState.poorSignal,
       ]);
     });

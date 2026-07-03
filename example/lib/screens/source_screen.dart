@@ -95,20 +95,12 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
     return false;
   }
 
-  Future<void> _start(MeasurementState currentState) async {
+  Future<void> _start() async {
     ppgTap('source_start');
     if (!await _checkAndRequestCameraPermission()) return;
     if (!mounted) return;
     setState(() => _lastError = null);
     final service = ref.read(cameraPpgServiceProvider);
-    if (currentState == MeasurementState.done) {
-      // `done` is terminal (spec note 09) and `CameraPpgSession` does not
-      // release the camera/torch on its own when it's reached — only
-      // stop()/dispose() do. Release the finished session first so Start
-      // from `done` recovers instead of hitting the service's re-entry
-      // guard as a silent no-op.
-      await service.stopMeasurement();
-    }
     final config = ref.read(sessionConfigProvider);
     final error = await service.startMeasurement(
       cameraId: _selectedCameraId,
@@ -128,12 +120,6 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   Widget build(BuildContext context) {
     final stateAsync = ref.watch(stateProvider);
     final state = stateAsync.value ?? MeasurementState.idle;
-    // `isRunning` covers only the states where a live measurement is
-    // in flight — `done` is terminal but still holds an open (unreleased)
-    // session, so it must not be lumped in with `idle`: Stop needs to stay
-    // enabled to release it, and Start needs to route through the
-    // `done`-recovery path in `_start` rather than being enabled straight
-    // into the service's re-entry no-op.
     final isRunning = state == MeasurementState.warmup ||
         state == MeasurementState.measuring ||
         state == MeasurementState.poorSignal;
@@ -149,7 +135,7 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
             _errorBanner(_lastError!),
             const SizedBox(height: 12),
           ],
-          _startStopRow(state: state, isRunning: isRunning, canStop: canStop),
+          _startStopRow(isRunning: isRunning, canStop: canStop),
           const SizedBox(height: 16),
           _qualityAndPresenceRow(),
           const SizedBox(height: 16),
@@ -167,7 +153,6 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
       MeasurementState.warmup => ('Hold still… warming up', Colors.blue),
       MeasurementState.measuring => ('Measuring', Colors.green),
       MeasurementState.poorSignal => ('Poor signal — check finger placement', Colors.orange),
-      MeasurementState.done => ('Complete', Colors.indigo),
     };
     return Container(
       width: double.infinity,
@@ -208,9 +193,7 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
           OutlinedButton(
             onPressed: () {
               ppgTap('source_retry');
-              // A failed start() always leaves the session at `idle` (spec
-              // note 07) — retry never needs the `done`-recovery path.
-              _start(MeasurementState.idle);
+              _start();
             },
             child: const Text('Retry'),
           ),
@@ -220,7 +203,6 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   }
 
   Widget _startStopRow({
-    required MeasurementState state,
     required bool isRunning,
     required bool canStop,
   }) {
@@ -228,7 +210,7 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
       children: [
         Expanded(
           child: ElevatedButton(
-            onPressed: isRunning ? null : () => _start(state),
+            onPressed: isRunning ? null : () => _start(),
             child: const Text('Start'),
           ),
         ),
@@ -351,7 +333,6 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
               children: [
                 const Text('Session policy (note 09)', style: TextStyle(fontWeight: FontWeight.bold)),
                 _intField('Warm-up (s)', policy.warmupDuration.inSeconds, notifier.setWarmupSeconds),
-                _intField('Target duration (s)', policy.targetDuration.inSeconds, notifier.setTargetSeconds),
                 _intField('Silence window (s)', policy.silenceWindow.inSeconds, notifier.setSilenceSeconds),
                 Row(
                   children: [

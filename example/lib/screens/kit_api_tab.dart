@@ -77,7 +77,6 @@ class _KitApiTabState extends ConsumerState<KitApiTab> {
       MeasurementState.warmup => ('Hold still… warming up', Colors.blue),
       MeasurementState.measuring => ('Measuring', Colors.green),
       MeasurementState.poorSignal => ('Poor signal — check finger placement', Colors.orange),
-      MeasurementState.done => ('Complete', Colors.indigo),
     };
     return Container(
       width: double.infinity,
