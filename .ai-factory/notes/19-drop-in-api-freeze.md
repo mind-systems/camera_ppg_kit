@@ -15,8 +15,11 @@
 ### What crosses the barrel (the frozen surface)
 
 Enumerate exactly, asserting nothing else is exported from `lib/camera_ppg_kit.dart`:
-- `CameraPpgSession` (note 07) — `start()`/`stop()`/`dispose()`, `rrStream`, `qualityStream`, `stateStream`; plus the selection/override API (note 08): `availableCameras()`, `useCamera(id)`.
-- `CameraPpgSession.buildPreview() → Widget?` (plan 25) — a **deliberate post-freeze addition** (see Guards): returns a live camera-texture `Widget` for the session's own locked controller, or `null` when there is nothing to show (idle, pre-lock probe, or after `stop()`/`dispose()`). The return type is a plain `package:flutter` `Widget` — no `camera`/`CameraController` type crosses this method, consistent with the freeze's leaked-type pitfall above.
+- `CameraPpgSession` (note 07) — `start()`/`stop()`/`dispose()`, `rrStream`, `qualityStream`, `stateStream`.
+- **Camera-coverage UX surface — first-class contract, NOT debug, cross-platform identical (notes 08/35/36/42).** Because auto-detecting which physical lens the finger covers is unsolved, the integrator's end-user picks the lens and verifies coverage on the live preview — so this whole surface is part of the drop-in contract `mind_mobile` codes against, and behaves identically on iOS and Android:
+  - `availableCameras()` / `useCamera(id)` (note 08) — the **frozen signatures** are `Future<List<CameraPpgCameraInfo>> availableCameras()` and `useCamera(String id)`. At freeze the list is the plugin lens(es). **Phase 13 (note 42) enriches this list additively** — on Android it later also contains native camera2 lenses, with the id encoding the backend and the kit routing internally — **without changing either signature**, so plugin-vs-native never becomes a public concept and this freeze is not reopened. This ordering is deliberate: freeze the shape at Phase 10; the native enrichment is a compliant post-freeze addition, not a prerequisite.
+  - `buildPreview() → Widget?` (note 35) — live camera-texture `Widget` for the active lens, or `null` when nothing to show (idle / pre-lock / after `stop()`). Plain `package:flutter` `Widget` — no `camera`/`CameraController` type crosses.
+  - `resolvedCamera` + its stream (note 36) — which lens is currently active, so the host UI can label it.
 - `RrInterval` (note 05) — shape-identical to neiry's `RRInterval` so the host's RR mixin binds both sources with one type.
 - `SignalQuality` + `fromSnr` (note 05).
 - `MeasurementState`, `FingerPresence`, `CameraPpgError` (note 06) — typed values, never thrown.
