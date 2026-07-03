@@ -91,7 +91,7 @@
 
 > Hardens the lifecycle paths the spike and example surface.
 
-- [ ] **Lifecycle & teardown** — the kit-side ordered, idempotent `_release()`/`_tearDownHandles` already exists in `CameraPpgSession` (notes 07/13 — close-before-cancel, routed through the frame isolate). Remaining: release on **background / hot-restart** via a `WidgetsBindingObserver` — under the neiry-mirror shell (note 22) it lives at the app-shell level in `main.dart` and releases the app-level `CameraPpgService` source (`stopMeasurement()`), not a per-screen observer. Spec: `.ai-factory/notes/17-lifecycle-teardown.md`.
+- [x] **Lifecycle & teardown** — the kit-side ordered, idempotent `_release()`/`_tearDownHandles` already exists in `CameraPpgSession` (notes 07/13 — close-before-cancel, routed through the frame isolate). Remaining: release on **background / hot-restart** via a `WidgetsBindingObserver` — under the neiry-mirror shell (note 22) it lives at the app-shell level in `main.dart` and releases the app-level `CameraPpgService` source (`stopMeasurement()`), not a per-screen observer. Spec: `.ai-factory/notes/17-lifecycle-teardown.md`. [10m 6s]
 - [x] **Permission gating** — denied-permission fails cleanly as a value, never a crash: the example requests camera permission before `start()` (note 15), and if `start()` is reached without it the kit maps the `CameraException` to `CameraPpgError.permissionDenied` and acquires nothing. **Unsupported-device deny-list dropped** — no device is known-bad yet; plan it if/when one appears (the `CameraPpgErrorType.unsupportedDevice` value stays, harmless/unused). Spec: `.ai-factory/notes/18-permission-unsupported-gating.md`.
 
 ## Phase 10 — Integration readiness

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'auto_detect/auto_detect_screen.dart';
 import 'auto_detect/log.dart';
 import 'providers/camera_ppg_service_provider.dart';
+import 'providers/session_config_provider.dart';
 import 'screens/calibration_screen.dart';
 import 'screens/streams_screen.dart';
 import 'screens/source_screen.dart';
@@ -82,8 +83,72 @@ class _Shell extends ConsumerStatefulWidget {
   ConsumerState<_Shell> createState() => _ShellState();
 }
 
-class _ShellState extends ConsumerState<_Shell> {
+class _ShellState extends ConsumerState<_Shell> with WidgetsBindingObserver {
   _Branch _selected = _Branch.source;
+
+  /// Set when the app is backgrounded while a measurement is in flight, so
+  /// [didChangeAppLifecycleState]'s `resumed` branch knows to re-arm.
+  /// Default `false` is deliberate: it is only ever set `true` under the
+  /// `isMeasuring` guard below, so a background-while-idle -> foreground
+  /// sequence never auto-starts a measurement the operator never requested.
+  bool _wasMeasuring = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Releases the app-level source on background and re-arms it on
+  /// foreground if a measurement was active — the shell-level observer the
+  /// spec (note 17) mandates. Never a per-screen observer; all teardown goes
+  /// through [CameraPpgService.stopMeasurement], the single funnel.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.paused:
+        if (ref.read(cameraPpgServiceProvider).isMeasuring) {
+          _wasMeasuring = true;
+          ppgLog('Shell: app backgrounded — releasing kit source');
+          // Not awaited — the lifecycle callback can't be async.
+          // `stopMeasurement()` flips lifecycle to `stopping` synchronously
+          // and runs the ordered kit release, same pattern as the Raw-entry
+          // hook below. Double-fire safe: backgrounding on Android fires
+          // `inactive` then `paused`, so this branch can run twice, but
+          // `stopMeasurement()` is idempotent and re-setting an
+          // already-`true` `_wasMeasuring` is a no-op.
+          ref.read(cameraPpgServiceProvider).stopMeasurement();
+        }
+      case AppLifecycleState.resumed:
+        if (_wasMeasuring) {
+          _wasMeasuring = false;
+          ppgLog('Shell: app foregrounded — re-arming measurement');
+          final config = ref.read(sessionConfigProvider);
+          // `cameraId` omitted deliberately — re-arm runs the signal-based
+          // auto-detect round-trip; the operator-selected override lives in
+          // `SourceScreen`'s local state and is not reachable from the
+          // shell. Permission pre-check is deliberately skipped here: it was
+          // necessarily granted for the measurement that had been running,
+          // and if revoked the kit maps it to a `CameraPpgError` value
+          // rather than throwing, so this degrades to a silent no-op the
+          // operator can retry from the Source screen.
+          ref.read(cameraPpgServiceProvider).startMeasurement(
+                policy: config.policy,
+                acceptance: config.acceptance,
+              );
+        }
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        break;
+    }
+  }
 
   void _onDestinationSelected(int index) {
     final branch = _Branch.values[index];
