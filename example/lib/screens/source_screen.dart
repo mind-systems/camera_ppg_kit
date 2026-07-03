@@ -1,12 +1,15 @@
 import 'package:camera_ppg_kit/camera_ppg_kit.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+// `flutter_riverpod` exports its own `AsyncError`, colliding with the widget
+// kit's `AsyncError` (async_states.dart) — hide riverpod's so the kit's wins.
+import 'package:flutter_riverpod/flutter_riverpod.dart' hide AsyncError;
 import 'package:permission_handler/permission_handler.dart';
 
 import '../auto_detect/log.dart';
 import '../providers/camera_ppg_service_provider.dart';
 import '../providers/session_config_provider.dart';
 import '../providers/stream_providers.dart';
+import '../widgets/widgets.dart';
 
 /// Source branch — the **sole** screen that issues
 /// `service.startMeasurement()` / `stopMeasurement()`, mirroring neiry's
@@ -124,22 +127,23 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
         state == MeasurementState.measuring ||
         state == MeasurementState.poorSignal;
     final canStop = state != MeasurementState.idle;
+    final (label, color) = _stateLabelColor(state);
 
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _stateBanner(state),
+          StateBanner(label, color),
           const SizedBox(height: 12),
           if (_lastError != null) ...[
             _errorBanner(_lastError!),
             const SizedBox(height: 12),
           ],
-          _startStopRow(isRunning: isRunning, canStop: canStop),
+          _controlCard(isRunning: isRunning, canStop: canStop),
           const SizedBox(height: 16),
-          _qualityAndPresenceRow(),
+          _signalCard(),
           const SizedBox(height: 16),
-          _cameraOverrideSection(isRunning),
+          _cameraOverrideCard(isRunning),
           const SizedBox(height: 16),
           _debugPanel(),
         ],
@@ -147,81 +151,64 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
     );
   }
 
-  Widget _stateBanner(MeasurementState state) {
-    final (label, color) = switch (state) {
-      MeasurementState.idle => ('Idle', Colors.grey),
-      MeasurementState.warmup => ('Hold still… warming up', Colors.blue),
-      MeasurementState.measuring => ('Measuring', Colors.green),
-      MeasurementState.poorSignal => ('Poor signal — check finger placement', Colors.orange),
-    };
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16),
-        textAlign: TextAlign.center,
-      ),
-    );
-  }
+  /// Maps [MeasurementState] onto its banner label + semantic color. Only
+  /// the four current enum values — no `done`/"Complete" arm is reintroduced
+  /// (note 23).
+  ///
+  /// `poorSignal → fairColor` (orange) is intentional: `poorColor` (red) is
+  /// reserved for the error banner, so a later edit should not "correct"
+  /// this to `poorColor`.
+  (String, Color) _stateLabelColor(MeasurementState state) => switch (state) {
+        MeasurementState.idle => ('Idle', idleColor),
+        MeasurementState.warmup => ('Hold still… warming up', pendingColor),
+        MeasurementState.measuring => ('Measuring', goodColor),
+        MeasurementState.poorSignal => ('Poor signal — check finger placement', fairColor),
+      };
 
   Widget _errorBanner(CameraPpgError error) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.red.shade50,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.red),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${error.type.name}${error.message != null ? ' — ${error.message}' : ''}',
-            style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-          ),
-          if (error.permanentlyDenied)
-            const Text('Permission permanently denied — grant it in system settings.',
-                style: TextStyle(color: Colors.red)),
-          const SizedBox(height: 8),
-          OutlinedButton(
+    final message = error.message != null ? ' — ${error.message}' : '';
+    final guidance = error.permanentlyDenied
+        ? '\nPermission permanently denied — grant it in system settings.'
+        : '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        StateBanner('${error.type.name}$message$guidance', poorColor),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton(
             onPressed: () {
               ppgTap('source_retry');
               _start();
             },
             child: const Text('Retry'),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
-  Widget _startStopRow({
-    required bool isRunning,
-    required bool canStop,
-  }) {
-    return Row(
-      children: [
-        Expanded(
-          child: ElevatedButton(
-            onPressed: isRunning ? null : () => _start(),
-            child: const Text('Start'),
+  Widget _controlCard({required bool isRunning, required bool canStop}) {
+    return SectionCard(
+      title: 'Control',
+      child: Row(
+        children: [
+          Expanded(
+            child: ElevatedButton(
+              onPressed: isRunning ? null : () => _start(),
+              child: const Text('Start'),
+            ),
           ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: OutlinedButton(
-            onPressed: canStop ? _stop : null,
-            child: const Text('Stop'),
+          const SizedBox(width: 12),
+          Expanded(
+            child: OutlinedButton(
+              onPressed: canStop ? _stop : null,
+              child: const Text('Stop'),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -229,16 +216,18 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   /// confirms the source is live before navigating to a consumer screen.
   /// Kit-API keeps an identical copy (Scope notes) — deliberately not
   /// factored into a shared widget.
-  Widget _qualityAndPresenceRow() {
-    final quality = ref.watch(qualityProvider).value;
+  ///
+  /// `qualityProvider` is a `StreamProvider` that sits in the `loading`
+  /// state (not a null-data state) until its first emit, so the SQI chip is
+  /// gated on the `AsyncValue` itself: `loading` renders `AsyncEmpty`
+  /// ("waiting for signal…"), `data` renders the `StatusChip`, `error`
+  /// renders `AsyncError`. Finger-presence has no live-source ambiguity in
+  /// practice worth a spinner, so it stays a plain `LabelRow` reusing the
+  /// existing `null → 'unknown'` fallback.
+  Widget _signalCard() {
+    final qualityAsync = ref.watch(qualityProvider);
     final presence = ref.watch(fingerPresenceProvider).value;
 
-    final qualityColor = switch (quality) {
-      SignalQuality.good => Colors.green,
-      SignalQuality.fair => Colors.orange,
-      SignalQuality.poor => Colors.red,
-      null => Colors.grey,
-    };
     final presenceLabel = switch (presence) {
       FingerPresence.present => 'finger present',
       FingerPresence.absent => 'no finger',
@@ -246,16 +235,20 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
       null => 'unknown',
     };
 
-    return Row(
-      children: [
-        Chip(
-          label: Text('SQI: ${quality?.name ?? '—'}'),
-          backgroundColor: qualityColor.withValues(alpha: 0.15),
-          labelStyle: TextStyle(color: qualityColor, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(width: 8),
-        Expanded(child: Text(presenceLabel, style: const TextStyle(fontSize: 13))),
-      ],
+    return SectionCard(
+      title: 'Signal',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          qualityAsync.when(
+            data: (quality) => StatusChip('SQI: ${quality.name}', qualityColor(quality)),
+            loading: () => const AsyncEmpty('waiting for signal…'),
+            error: (error, _) => AsyncError(error),
+          ),
+          const SizedBox(height: 8),
+          LabelRow('Finger', presenceLabel),
+        ],
+      ),
     );
   }
 
@@ -267,50 +260,51 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   /// `rrStream`/`qualityStream`/`stateStream`/`fingerPresenceStream`, never
   /// the resolved `CameraDescription`); adding one is a kit-surface change
   /// outside this example-only task.
-  Widget _cameraOverrideSection(bool isRunning) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            const Text('Camera override', style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(width: 8),
-            if (_loadingCameras)
-              const SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            else
-              TextButton(
-                onPressed: isRunning
-                    ? null
-                    : () {
-                        ppgTap('source_refresh_cameras');
-                        _loadCameras();
-                      },
-                child: const Text('Refresh'),
+  Widget _cameraOverrideCard(bool isRunning) {
+    return SectionCard(
+      title: 'Camera override',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (_loadingCameras)
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                TextButton(
+                  onPressed: isRunning
+                      ? null
+                      : () {
+                          ppgTap('source_refresh_cameras');
+                          _loadCameras();
+                        },
+                  child: const Text('Refresh'),
+                ),
+            ],
+          ),
+          DropdownButton<String?>(
+            isExpanded: true,
+            value: _selectedCameraId,
+            hint: const Text('Auto-detect (signal-based)'),
+            items: [
+              const DropdownMenuItem<String?>(
+                value: null,
+                child: Text('Auto-detect (signal-based)'),
               ),
-          ],
-        ),
-        DropdownButton<String?>(
-          isExpanded: true,
-          value: _selectedCameraId,
-          hint: const Text('Auto-detect (signal-based)'),
-          items: [
-            const DropdownMenuItem<String?>(
-              value: null,
-              child: Text('Auto-detect (signal-based)'),
-            ),
-            for (final cam in _cameras)
-              DropdownMenuItem<String?>(
-                value: cam.id,
-                child: Text('${cam.id} (${cam.lensType})'),
-              ),
-          ],
-          onChanged: isRunning ? null : _selectCamera,
-        ),
-      ],
+              for (final cam in _cameras)
+                DropdownMenuItem<String?>(
+                  value: cam.id,
+                  child: Text('${cam.id} (${cam.lensType})'),
+                ),
+            ],
+            onChanged: isRunning ? null : _selectCamera,
+          ),
+        ],
+      ),
     );
   }
 
@@ -320,9 +314,13 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
     final policy = config.policy;
     final acceptance = config.acceptance;
 
-    return Card(
+    return SectionCard(
+      title: '[debug] tuning',
       child: ExpansionTile(
-        title: const Text('[debug] tuning', style: TextStyle(fontWeight: FontWeight.bold)),
+        // Neutral collapse-control title — `SectionCard`'s `title` above is
+        // the sole "[debug] tuning" header; this avoids showing the string
+        // twice.
+        title: const Text('Tuning knobs'),
         initiallyExpanded: _debugExpanded,
         onExpansionChanged: (v) => setState(() => _debugExpanded = v),
         children: [
