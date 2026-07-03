@@ -9,6 +9,7 @@ import '../auto_detect/log.dart';
 import '../providers/camera_ppg_service_provider.dart';
 import '../providers/session_config_provider.dart';
 import '../providers/stream_providers.dart';
+import '../services/source_lifecycle.dart';
 import '../widgets/widgets.dart';
 
 /// Source branch — the **sole** screen that issues
@@ -121,13 +122,8 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final stateAsync = ref.watch(stateProvider);
-    final state = stateAsync.value ?? MeasurementState.idle;
-    final isRunning = state == MeasurementState.warmup ||
-        state == MeasurementState.measuring ||
-        state == MeasurementState.poorSignal;
-    final canStop = state != MeasurementState.idle;
-    final (label, color) = _stateLabelColor(state);
+    final lifecycle = ref.watch(lifecycleProvider).value ?? SourceLifecycle.idle;
+    final (label, color) = _stateLabelColor(lifecycle);
 
     return SafeArea(
       child: ListView(
@@ -139,11 +135,11 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
             _errorBanner(_lastError!),
             const SizedBox(height: 12),
           ],
-          _controlCard(isRunning: isRunning, canStop: canStop),
+          _controlCard(lifecycle),
           const SizedBox(height: 16),
           _signalCard(),
           const SizedBox(height: 16),
-          _cameraOverrideCard(isRunning),
+          _cameraOverrideCard(lifecycle != SourceLifecycle.idle),
           const SizedBox(height: 16),
           _debugPanel(),
         ],
@@ -151,18 +147,20 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
     );
   }
 
-  /// Maps [MeasurementState] onto its banner label + semantic color. Only
-  /// the four current enum values — no `done`/"Complete" arm is reintroduced
-  /// (note 23).
+  /// Maps [SourceLifecycle] onto its banner label + semantic color. Only the
+  /// six lifecycle values — no `done`/"Complete" arm is reintroduced (note
+  /// 23); the terminal path is always `stopping -> idle`.
   ///
   /// `poorSignal → fairColor` (orange) is intentional: `poorColor` (red) is
   /// reserved for the error banner, so a later edit should not "correct"
   /// this to `poorColor`.
-  (String, Color) _stateLabelColor(MeasurementState state) => switch (state) {
-        MeasurementState.idle => ('Idle', idleColor),
-        MeasurementState.warmup => ('Hold still… warming up', pendingColor),
-        MeasurementState.measuring => ('Measuring', goodColor),
-        MeasurementState.poorSignal => ('Poor signal — check finger placement', fairColor),
+  (String, Color) _stateLabelColor(SourceLifecycle lifecycle) => switch (lifecycle) {
+        SourceLifecycle.idle => ('Idle', idleColor),
+        SourceLifecycle.starting => ('Starting…', pendingColor),
+        SourceLifecycle.warmup => ('Hold still… warming up', pendingColor),
+        SourceLifecycle.measuring => ('Measuring', goodColor),
+        SourceLifecycle.poorSignal => ('Poor signal — check finger placement', fairColor),
+        SourceLifecycle.stopping => ('Stopping…', pendingColor),
       };
 
   Widget _errorBanner(CameraPpgError error) {
@@ -189,22 +187,39 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
     );
   }
 
-  Widget _controlCard({required bool isRunning, required bool canStop}) {
+  /// Both buttons disabled + a small inline spinner during
+  /// [SourceLifecycle.isTransitional] (`starting`/`stopping`) — a slow or
+  /// hanging teardown reads as honest "Stopping…" progress instead of a
+  /// frozen active state (spec note 33).
+  Widget _controlCard(SourceLifecycle lifecycle) {
+    final transitional = lifecycle.isTransitional;
     return SectionCard(
       title: 'Control',
       child: Row(
         children: [
           Expanded(
             child: ElevatedButton(
-              onPressed: isRunning ? null : () => _start(),
-              child: const Text('Start'),
+              onPressed: lifecycle == SourceLifecycle.idle ? () => _start() : null,
+              child: transitional
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Start'),
             ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: OutlinedButton(
-              onPressed: canStop ? _stop : null,
-              child: const Text('Stop'),
+              onPressed: lifecycle.isActive ? _stop : null,
+              child: transitional
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Stop'),
             ),
           ),
         ],
@@ -255,12 +270,16 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   /// Lets the developer pin a rear sensor via [CameraPpgSession.useCamera]
   /// (through the service), or leave it on auto-detect (the default).
   ///
+  /// [locked] is `true` whenever `lifecycle != SourceLifecycle.idle` — camera
+  /// choice is locked during `starting`/active/`stopping` alike, not just
+  /// while actively measuring (spec note 33).
+  ///
   /// Does not show which sensor auto-detect itself locked — the current
   /// barrel exposes no such accessor (`CameraPpgSession` surfaces only
   /// `rrStream`/`qualityStream`/`stateStream`/`fingerPresenceStream`, never
   /// the resolved `CameraDescription`); adding one is a kit-surface change
   /// outside this example-only task.
-  Widget _cameraOverrideCard(bool isRunning) {
+  Widget _cameraOverrideCard(bool locked) {
     return SectionCard(
       title: 'Camera override',
       child: Column(
@@ -276,7 +295,7 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
                 )
               else
                 TextButton(
-                  onPressed: isRunning
+                  onPressed: locked
                       ? null
                       : () {
                           ppgTap('source_refresh_cameras');
@@ -301,7 +320,7 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
                   child: Text('${cam.id} (${cam.lensType})'),
                 ),
             ],
-            onChanged: isRunning ? null : _selectCamera,
+            onChanged: locked ? null : _selectCamera,
           ),
         ],
       ),

@@ -1,6 +1,7 @@
 import 'package:camera_ppg_kit/camera_ppg_kit.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../services/source_lifecycle.dart';
 import 'camera_ppg_service_provider.dart';
 
 /// Every RR interval from the current measurement, artifacts included —
@@ -25,6 +26,13 @@ final stateProvider = StreamProvider<MeasurementState>((ref) {
 /// Finger-presence classification, driving "press your finger" guidance.
 final fingerPresenceProvider = StreamProvider<FingerPresence>((ref) {
   return ref.watch(cameraPpgServiceProvider).fingerPresenceStream;
+});
+
+/// Example-side lifecycle — the single source of truth screens render for
+/// Start/Stop gating and the state banner (spec note 33), superseding
+/// per-screen `isRunning`/`canStop` derivation off [stateProvider].
+final lifecycleProvider = StreamProvider<SourceLifecycle>((ref) {
+  return ref.watch(cameraPpgServiceProvider).lifecycleStream;
 });
 
 /// Display-only derived BPM — never pushed into the kit (BPM/HRV are the

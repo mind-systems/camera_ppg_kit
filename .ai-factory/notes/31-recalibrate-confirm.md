@@ -5,9 +5,11 @@
 
 ## Precondition
 
-Note 30's adaptive de-halving is implemented and green on the offline fixtures. This
-task closes calibration handoff #1: prove the fix holds on real hardware across the
-pulse range, then commit the resulting tuning as the kit's internal defaults.
+Note 30's adaptive de-halving is implemented and green on the offline fixtures. This is
+a **human-in-the-loop** task (needs the tester's finger — it is the reason the STOP
+marker exists): prove the fix holds on real hardware across the pulse range and report
+the validated numbers. It writes **no code**. Committing those numbers as the kit's
+internal defaults is the orchestrator's follow-up, note 34, gated on this task's output.
 
 ## Current state
 

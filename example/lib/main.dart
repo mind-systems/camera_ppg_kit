@@ -91,12 +91,12 @@ class _ShellState extends ConsumerState<_Shell> {
     if (branch == _Branch.raw) {
       // Not awaited — a `NavigationBar` callback can't be async. The ordered
       // release (stop image stream -> dispose isolate -> torch off -> dispose
-      // controller) takes hundreds of ms, so a user who switches here and
-      // immediately triggers Raw's auto-detect could in principle race a
-      // still-closing controller into a `CameraException`. Raw only opens
-      // the camera on an explicit "Start" tap (never on branch entry), so
-      // normal human reaction time makes this unlikely in practice — a
-      // known, accepted residual race, not a fix owed here.
+      // controller) still takes hundreds of ms and can run past this call
+      // returning, but that no longer leaves a race for a following Start to
+      // land in: `stopMeasurement()` flips the shared lifecycle to
+      // `SourceLifecycle.stopping` synchronously on entry (spec note 33), and
+      // the Source screen gates its Start button on `lifecycle == idle`. So a
+      // Start fired mid-teardown is closed by gating here, not by awaiting.
       ppgLog('Shell: entering Raw — releasing kit source camera/torch');
       ref.read(cameraPpgServiceProvider).stopMeasurement();
     }

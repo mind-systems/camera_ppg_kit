@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart' hide AsyncError;
 
 import '../providers/stream_providers.dart';
+import '../services/source_lifecycle.dart';
 import '../widgets/widgets.dart';
 
 /// Streams screen — dogfoods the kit's **public barrel only** (spec note
@@ -55,9 +56,8 @@ class _StreamsScreenState extends ConsumerState<StreamsScreen> {
       });
     });
 
-    final stateAsync = ref.watch(stateProvider);
-    final state = stateAsync.value ?? MeasurementState.idle;
-    final (label, color) = _stateLabelColor(state);
+    final lifecycle = ref.watch(lifecycleProvider).value ?? SourceLifecycle.idle;
+    final (label, color) = _stateLabelColor(lifecycle);
 
     return SafeArea(
       child: ListView(
@@ -75,18 +75,22 @@ class _StreamsScreenState extends ConsumerState<StreamsScreen> {
     );
   }
 
-  /// Maps [MeasurementState] onto its banner label + semantic color. Only
-  /// the four current enum values — no `done`/"Complete" arm is reintroduced
-  /// (note 23).
+  /// Maps [SourceLifecycle] onto its banner label + semantic color — own
+  /// copy, deliberately not factored into a shared widget (Scope notes).
+  /// During teardown this shows **Stopping…** rather than a frozen
+  /// "Measuring" (spec note 33). No `done`/"Complete" arm is reintroduced
+  /// (note 23) — the terminal path is always `stopping -> idle`.
   ///
   /// `poorSignal → fairColor` (orange) is intentional: `poorColor` (red) is
   /// reserved for error states, so a later edit should not "correct" this to
   /// `poorColor`.
-  (String, Color) _stateLabelColor(MeasurementState state) => switch (state) {
-        MeasurementState.idle => ('Idle', idleColor),
-        MeasurementState.warmup => ('Hold still… warming up', pendingColor),
-        MeasurementState.measuring => ('Measuring', goodColor),
-        MeasurementState.poorSignal => ('Poor signal — check finger placement', fairColor),
+  (String, Color) _stateLabelColor(SourceLifecycle lifecycle) => switch (lifecycle) {
+        SourceLifecycle.idle => ('Idle', idleColor),
+        SourceLifecycle.starting => ('Starting…', pendingColor),
+        SourceLifecycle.warmup => ('Hold still… warming up', pendingColor),
+        SourceLifecycle.measuring => ('Measuring', goodColor),
+        SourceLifecycle.poorSignal => ('Poor signal — check finger placement', fairColor),
+        SourceLifecycle.stopping => ('Stopping…', pendingColor),
       };
 
   /// Headline metric — the biggest, most prominent number on the screen.

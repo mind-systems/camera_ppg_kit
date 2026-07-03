@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:camera_ppg_kit/camera_ppg_kit.dart';
 
 import '../auto_detect/log.dart';
+import 'source_lifecycle.dart';
 
 /// Example-app composition root for the kit's public barrel (spec note 16) —
 /// the analogue of `neiry_kit`'s `NeiryService`, never part of the published
@@ -28,12 +29,18 @@ class CameraPpgService {
         _qualityController = StreamController<SignalQuality>.broadcast(),
         _stateController = StreamController<MeasurementState>.broadcast(),
         _fingerPresenceController =
-            StreamController<FingerPresence>.broadcast();
+            StreamController<FingerPresence>.broadcast(),
+        _lifecycleController = StreamController<SourceLifecycle>.broadcast();
 
   final StreamController<RrInterval> _rrController;
   final StreamController<SignalQuality> _qualityController;
   final StreamController<MeasurementState> _stateController;
   final StreamController<FingerPresence> _fingerPresenceController;
+  final StreamController<SourceLifecycle> _lifecycleController;
+
+  /// Current lifecycle value — see [lifecycleStream]. The single source of
+  /// truth for "what the source is doing right now" (spec note 33).
+  SourceLifecycle _lifecycle = SourceLifecycle.idle;
 
   /// The in-flight measurement session, or `null` when idle. A new instance
   /// is created by every [startMeasurement] call and disposed by the
@@ -68,11 +75,30 @@ class CameraPpgService {
   Stream<FingerPresence> get fingerPresenceStream =>
       _fingerPresenceController.stream;
 
+  /// Broadcast stream of [SourceLifecycle] transitions — the single source
+  /// of truth screens render Start/Stop gating and the state banner from
+  /// (spec note 33), superseding per-screen `isRunning`/`canStop`
+  /// derivation off the kit's [MeasurementState]. Stays open across
+  /// stop/start cycles.
+  Stream<SourceLifecycle> get lifecycleStream => _lifecycleController.stream;
+
   /// Whether a measurement session is currently in flight.
   bool get isMeasuring => _measuring && _session != null;
 
   void _checkNotDisposed() {
     if (_disposed) throw StateError('CameraPpgService has been disposed');
+  }
+
+  /// Stores [next] as the current lifecycle and emits it on
+  /// [lifecycleStream]. Logs a coarse milestone — the only new logging this
+  /// task adds (spec note 33).
+  void _setLifecycle(SourceLifecycle next) {
+    final prev = _lifecycle;
+    _lifecycle = next;
+    if (!_lifecycleController.isClosed) {
+      _lifecycleController.add(next);
+    }
+    ppgLog('lifecycle: ${prev.name} -> ${next.name}');
   }
 
   /// Starts a new measurement: creates a fresh [CameraPpgSession], pins
@@ -100,6 +126,7 @@ class CameraPpgService {
       return null;
     }
     _measuring = true;
+    _setLifecycle(SourceLifecycle.starting);
 
     final session = CameraPpgSession(policy: policy, acceptance: acceptance);
     _session = session;
@@ -110,7 +137,13 @@ class CameraPpgService {
     _subs.addAll([
       session.rrStream.listen(_rrController.add, onError: _rrController.addError),
       session.qualityStream.listen(_qualityController.add, onError: _qualityController.addError),
-      session.stateStream.listen(_stateController.add, onError: _stateController.addError),
+      session.stateStream.listen(
+        (state) {
+          _stateController.add(state);
+          _foldLifecycle(state);
+        },
+        onError: _stateController.addError,
+      ),
       session.fingerPresenceStream.listen(
         _fingerPresenceController.add,
         onError: _fingerPresenceController.addError,
@@ -125,6 +158,34 @@ class CameraPpgService {
       await stopMeasurement();
     }
     return error;
+  }
+
+  /// Folds a kit [MeasurementState] emit into [_lifecycle] while a
+  /// measurement is running — this is what advances `starting -> warmup` on
+  /// the first kit emit and keeps lifecycle tracking `warmup`/`measuring`/
+  /// `poorSignal` thereafter.
+  ///
+  /// Guard (spec note 33): while [_lifecycle] is already `stopping` or
+  /// `idle`, every kit emit is ignored, so a late emit reaching this bridge
+  /// after [stopMeasurement] has already started teardown can't bounce
+  /// lifecycle back off `stopping`. A kit [MeasurementState.idle] arriving
+  /// mid-run is likewise ignored — the authoritative `idle` comes only from
+  /// the `stopMeasurement` teardown path, never from a stray kit emit.
+  void _foldLifecycle(MeasurementState state) {
+    if (_lifecycle == SourceLifecycle.stopping ||
+        _lifecycle == SourceLifecycle.idle) {
+      return;
+    }
+    switch (state) {
+      case MeasurementState.warmup:
+        _setLifecycle(SourceLifecycle.warmup);
+      case MeasurementState.measuring:
+        _setLifecycle(SourceLifecycle.measuring);
+      case MeasurementState.poorSignal:
+        _setLifecycle(SourceLifecycle.poorSignal);
+      case MeasurementState.idle:
+        break;
+    }
   }
 
   /// Stops the current measurement (if any) and releases the camera + torch.
@@ -147,8 +208,15 @@ class CameraPpgService {
     final session = _session;
     if (session == null) {
       _measuring = false;
+      // No in-flight session to stop — this is not a real teardown, so no
+      // `stopping` transition. Defensively settle a stray non-idle lifecycle
+      // (there shouldn't be one), otherwise leave it as-is.
+      if (_lifecycle != SourceLifecycle.idle) {
+        _setLifecycle(SourceLifecycle.idle);
+      }
       return;
     }
+    _setLifecycle(SourceLifecycle.stopping);
     for (final sub in _subs) {
       await sub.cancel();
     }
@@ -162,6 +230,7 @@ class CameraPpgService {
     if (!_stateController.isClosed) {
       _stateController.add(MeasurementState.idle);
     }
+    _setLifecycle(SourceLifecycle.idle);
   }
 
   /// Enumerates rear-facing cameras for the override UI, without a running
@@ -190,5 +259,6 @@ class CameraPpgService {
     await _qualityController.close();
     await _stateController.close();
     await _fingerPresenceController.close();
+    await _lifecycleController.close();
   }
 }

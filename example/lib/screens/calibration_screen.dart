@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:camera_ppg_kit/camera_ppg_kit.dart';
 import 'package:flutter/material.dart';
 // `flutter_riverpod` exports its own `AsyncError`, colliding with the widget
 // kit's `AsyncError` (async_states.dart) — hide riverpod's so the kit's wins.
@@ -11,6 +10,7 @@ import '../calibration/calibration_recorder.dart';
 import '../providers/camera_ppg_service_provider.dart';
 import '../providers/session_config_provider.dart';
 import '../providers/stream_providers.dart';
+import '../services/source_lifecycle.dart';
 import '../widgets/widgets.dart';
 
 /// Calibration branch — a **pure consumer** of the already-flowing RR stream
@@ -140,31 +140,36 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   }
 
   /// Wrapped in its own [Consumer] for the same isolation reason as
-  /// [_bpmSection]: `stateProvider` emits at frame cadence, so watching it in
-  /// a leaf keeps that rebuild off the countdown/buttons (note 21).
+  /// [_bpmSection]: `lifecycleProvider` can emit as often as the underlying
+  /// kit state does, so watching it in a leaf keeps that rebuild off the
+  /// countdown/buttons (note 21).
   Widget _stateBanner() {
     return Consumer(
       builder: (context, ref, _) {
-        final stateAsync = ref.watch(stateProvider);
-        final state = stateAsync.value ?? MeasurementState.idle;
-        final (label, color) = _stateLabelColor(state);
+        final lifecycle = ref.watch(lifecycleProvider).value ?? SourceLifecycle.idle;
+        final (label, color) = _stateLabelColor(lifecycle);
         return StateBanner(label, color);
       },
     );
   }
 
-  /// Maps [MeasurementState] onto its banner label + semantic color — copied
-  /// from `streams_screen.dart:_stateLabelColor`. Only the four current enum
-  /// values — no `done`/"Complete" arm is reintroduced (note 23).
+  /// Maps [SourceLifecycle] onto its banner label + semantic color — copied
+  /// from `streams_screen.dart:_stateLabelColor` (own copy, deliberately not
+  /// factored into a shared widget, Scope notes). During teardown this shows
+  /// **Stopping…** rather than a frozen "Measuring" (spec note 33). No
+  /// `done`/"Complete" arm is reintroduced (note 23) — the terminal path is
+  /// always `stopping -> idle`.
   ///
   /// `poorSignal → fairColor` (orange) is intentional: `poorColor` (red) is
   /// reserved for error states, so a later edit should not "correct" this to
   /// `poorColor`.
-  (String, Color) _stateLabelColor(MeasurementState state) => switch (state) {
-        MeasurementState.idle => ('Idle', idleColor),
-        MeasurementState.warmup => ('Hold still… warming up', pendingColor),
-        MeasurementState.measuring => ('Measuring', goodColor),
-        MeasurementState.poorSignal => ('Poor signal — check finger placement', fairColor),
+  (String, Color) _stateLabelColor(SourceLifecycle lifecycle) => switch (lifecycle) {
+        SourceLifecycle.idle => ('Idle', idleColor),
+        SourceLifecycle.starting => ('Starting…', pendingColor),
+        SourceLifecycle.warmup => ('Hold still… warming up', pendingColor),
+        SourceLifecycle.measuring => ('Measuring', goodColor),
+        SourceLifecycle.poorSignal => ('Poor signal — check finger placement', fairColor),
+        SourceLifecycle.stopping => ('Stopping…', pendingColor),
       };
 
   Widget _countdownCard() {
