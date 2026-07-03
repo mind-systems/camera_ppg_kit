@@ -59,6 +59,8 @@ class CameraPpgSession {
         _debugSignalController = StreamController<List<double>>.broadcast(),
         _fingerPresenceController =
             StreamController<FingerPresence>.broadcast(),
+        _resolvedCameraController =
+            StreamController<CameraPpgCameraInfo?>.broadcast(),
         _policy = policy ?? SessionPolicy(),
         _acceptance = acceptance ?? RrAcceptance(),
         _dehalving = dehalving ?? RrDehalving();
@@ -68,6 +70,7 @@ class CameraPpgSession {
   final StreamController<MeasurementState> _stateController;
   final StreamController<List<double>> _debugSignalController;
   final StreamController<FingerPresence> _fingerPresenceController;
+  final StreamController<CameraPpgCameraInfo?> _resolvedCameraController;
 
   /// Warm-up/duration/acceptance policy (spec note 09) that drives [_state]
   /// once a sensor is locked. Constructor-injectable so the example's
@@ -99,6 +102,11 @@ class CameraPpgSession {
   /// locks: [MeasurementState.idle] when not running, then
   /// `warmup → measuring ⇄ poorSignal → done` per [SessionPolicy].
   MeasurementState _state = MeasurementState.idle;
+
+  /// The lens [start] resolved and locked (auto-detect or pinned
+  /// [useCamera]), mirrored on [resolvedCamera]/[resolvedCameraStream]. See
+  /// those accessors' docs for the lifecycle.
+  CameraPpgCameraInfo? _resolvedCamera;
 
   /// Double-start / re-entrancy guard for [start] (review F3).
   bool _running = false;
@@ -158,6 +166,19 @@ class CameraPpgSession {
   /// distinction) to render acceptance-gate guidance.
   Stream<FingerPresence> get fingerPresenceStream =>
       _fingerPresenceController.stream;
+
+  /// The lens [start] resolved and locked, or `null`.
+  ///
+  /// `null` while idle and during the pre-lock auto-detect probe; non-null
+  /// from the moment [start] locks a sensor (auto-detect round-trip or a
+  /// pinned [useCamera]) through teardown; clears back to `null` on
+  /// [stop]/[dispose] — the same lifecycle [buildPreview] documents.
+  CameraPpgCameraInfo? get resolvedCamera => _resolvedCamera;
+
+  /// Broadcast stream mirroring [resolvedCamera] — emits the newly-locked
+  /// lens on [start] and `null` again on [stop]/[dispose].
+  Stream<CameraPpgCameraInfo?> get resolvedCameraStream =>
+      _resolvedCameraController.stream;
 
   /// Live camera texture for the session's own locked controller, or `null`
   /// when there is nothing to show.
@@ -371,6 +392,7 @@ class CameraPpgSession {
         _stopwatch
           ..reset()
           ..start();
+        _setResolvedCamera(_toCameraInfo(description));
         _setState(MeasurementState.warmup);
         lockedAndStreaming = true;
         nlog('start(): locked ${description.name}, streaming');
@@ -426,6 +448,7 @@ class CameraPpgSession {
     await _stateController.close();
     await _debugSignalController.close();
     await _fingerPresenceController.close();
+    await _resolvedCameraController.close();
   }
 
   /// Single ordered, idempotent teardown used by [stop], [dispose], and
@@ -459,6 +482,7 @@ class CameraPpgSession {
     _stopwatch.stop();
     _acceptance.reset();
     _dehalving.reset();
+    _setResolvedCamera(null);
 
     await _tearDownHandles(
       controller: controller,
@@ -647,6 +671,27 @@ class CameraPpgSession {
     }
   }
 
+  /// Dedupes on [CameraPpgCameraInfo.id] (or on `null`), stores
+  /// [_resolvedCamera], and emits on [_resolvedCameraController] — same
+  /// shape as [_setState].
+  void _setResolvedCamera(CameraPpgCameraInfo? next) {
+    if (_resolvedCamera?.id == next?.id) return;
+    _resolvedCamera = next;
+    if (!_resolvedCameraController.isClosed) {
+      _resolvedCameraController.add(next);
+    }
+  }
+
+  /// Maps a `package:camera` [CameraDescription] to the kit's public
+  /// [CameraPpgCameraInfo] — the sole edge-mapping site, shared by
+  /// [availableCameras] and the lock path in [start], so no `camera` type
+  /// crosses the public boundary from more than one place.
+  CameraPpgCameraInfo _toCameraInfo(CameraDescription d) => CameraPpgCameraInfo(
+        id: d.name,
+        lensType: d.lensType.name,
+        flashAvailable: true,
+      );
+
   /// Returns every rear-facing camera in [availableCameras] enumeration
   /// order (default/main-wide first on iOS; single logical back on
   /// Android). [CameraDescription.lensType] is frequently `unknown`, so
@@ -681,13 +726,7 @@ class CameraPpgSession {
       nlog('availableCameras(): enumeration failed — ${e.code} ${e.description}');
       return const [];
     }
-    return cameras
-        .map((d) => CameraPpgCameraInfo(
-              id: d.name,
-              lensType: d.lensType.name,
-              flashAvailable: true,
-            ))
-        .toList();
+    return cameras.map(_toCameraInfo).toList();
   }
 
   /// Pure lookup resolving a [useCamera]-pinned id against the enumerated

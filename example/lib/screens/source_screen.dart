@@ -141,7 +141,7 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
           const SizedBox(height: 16),
           _signalCard(),
           const SizedBox(height: 16),
-          _cameraOverrideCard(lifecycle != SourceLifecycle.idle),
+          _cameraOverrideCard(lifecycle),
           const SizedBox(height: 16),
           _debugPanel(),
         ],
@@ -299,16 +299,30 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
   /// Lets the developer pin a rear sensor via [CameraPpgSession.useCamera]
   /// (through the service), or leave it on auto-detect (the default).
   ///
-  /// [locked] is `true` whenever `lifecycle != SourceLifecycle.idle` — camera
-  /// choice is locked during `starting`/active/`stopping` alike, not just
-  /// while actively measuring (spec note 33).
+  /// Camera choice is locked (dropdown/Refresh disabled) whenever
+  /// `lifecycle != SourceLifecycle.idle` — during `starting`/active/`stopping`
+  /// alike, not just while actively measuring (spec note 33).
   ///
-  /// Does not show which sensor auto-detect itself locked — the current
-  /// barrel exposes no such accessor (`CameraPpgSession` surfaces only
-  /// `rrStream`/`qualityStream`/`stateStream`/`fingerPresenceStream`, never
-  /// the resolved `CameraDescription`); adding one is a kit-surface change
-  /// outside this example-only task.
-  Widget _cameraOverrideCard(bool locked) {
+  /// Also shows which sensor auto-detect (or the pin) actually locked, read
+  /// fresh off the session's `resolvedCamera` (plan 26) — the text
+  /// complement to `_previewCard()`'s live texture, so camera selection is
+  /// verifiable without reading pixels. Read directly rather than through a
+  /// stream provider: this rides the same `ref.watch(lifecycleProvider)`
+  /// rebuild `_previewCard()` already relies on, so no extra wiring is
+  /// needed. The transient `'auto-detecting…'` text is gated on
+  /// [SourceLifecycle.starting] specifically, not on "locked but
+  /// unresolved" in general — `stopMeasurement()` nulls the service's
+  /// session before awaiting `dispose()`, so `resolvedCamera` also reads
+  /// `null` during `stopping`; without this gate that sub-second teardown
+  /// window would misleadingly read "auto-detecting…" (review finding 1).
+  Widget _cameraOverrideCard(SourceLifecycle lifecycle) {
+    final locked = lifecycle != SourceLifecycle.idle;
+    final resolved = ref.read(cameraPpgServiceProvider).session?.resolvedCamera;
+    final resolvedLabel = resolved != null
+        ? '${resolved.id} (${resolved.lensType})'
+        : lifecycle == SourceLifecycle.starting
+            ? 'auto-detecting…'
+            : '—';
     return SectionCard(
       title: 'Camera override',
       child: Column(
@@ -351,6 +365,8 @@ class _SourceScreenState extends ConsumerState<SourceScreen> {
             ],
             onChanged: locked ? null : _selectCamera,
           ),
+          const SizedBox(height: 8),
+          LabelRow('Locked lens', resolvedLabel),
         ],
       ),
     );
