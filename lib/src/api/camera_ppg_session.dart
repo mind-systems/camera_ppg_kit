@@ -14,6 +14,7 @@ import '../models/signal_quality.dart';
 import '../processing/frame_isolate.dart';
 import '../processing/frame_message.dart';
 import '../processing/rr_acceptance.dart';
+import '../processing/rr_dehalving.dart';
 import '../processing/session_policy.dart';
 import '../util/nlog.dart';
 import 'rr_diff.dart';
@@ -47,15 +48,19 @@ const Duration _probeDwell = Duration(milliseconds: 700);
 /// open, fed on start" pattern, so consumers can subscribe once and keep
 /// listening across measurements.
 class CameraPpgSession {
-  CameraPpgSession({SessionPolicy? policy, RrAcceptance? acceptance})
-      : _rrController = StreamController<RrInterval>.broadcast(),
+  CameraPpgSession({
+    SessionPolicy? policy,
+    RrAcceptance? acceptance,
+    RrDehalving? dehalving,
+  })  : _rrController = StreamController<RrInterval>.broadcast(),
         _qualityController = StreamController<SignalQuality>.broadcast(),
         _stateController = StreamController<MeasurementState>.broadcast(),
         _debugSignalController = StreamController<List<double>>.broadcast(),
         _fingerPresenceController =
             StreamController<FingerPresence>.broadcast(),
         _policy = policy ?? SessionPolicy(),
-        _acceptance = acceptance ?? RrAcceptance();
+        _acceptance = acceptance ?? RrAcceptance(),
+        _dehalving = dehalving ?? RrDehalving();
 
   final StreamController<RrInterval> _rrController;
   final StreamController<SignalQuality> _qualityController;
@@ -75,6 +80,13 @@ class CameraPpgSession {
   /// playground and tests can pass a tuned instance; defaults to a fresh
   /// [RrAcceptance] otherwise.
   final RrAcceptance _acceptance;
+
+  /// Adaptive RR-domain de-halving stage (spec note 30) that merges
+  /// harmonic-paired short beats before they reach [_acceptance] — killing
+  /// the peak-halving inversion the calibration runs exposed. Constructor-
+  /// injectable, mirroring [_policy]/[_acceptance]; defaults to a fresh
+  /// [RrDehalving] otherwise.
+  final RrDehalving _dehalving;
 
   /// Monotonic elapsed-time source for [_policy] — reset and started when a
   /// sensor locks, stopped on [_release]. The policy itself stays pure and
@@ -429,6 +441,7 @@ class CameraPpgSession {
     _generation++;
     _stopwatch.stop();
     _acceptance.reset();
+    _dehalving.reset();
 
     await _tearDownHandles(
       controller: controller,
@@ -556,23 +569,39 @@ class CameraPpgSession {
       // tick rather than per interval below.
       final timestamp = DateTime.fromMicrosecondsSinceEpoch(signal.timestampMicros);
       for (final rr in newIntervals) {
-        if (_rrController.isClosed) continue;
         // Timestamp caveat: assigned to every interval in this batch — a
         // fair approximation for this passthrough, but it diverges from
         // RrInterval.timestamp's "later peak" contract. PPGSignal.peakIndices
         // would give precise per-peak timing if a later phase wants it, but
         // SignalMessage deliberately doesn't carry it (not part of the five
         // fields _onSignal consumes).
-        //
-        // Every trusted interval is fed through [_acceptance], artifact or
-        // not — its own history-append logic already skips artifacts, so
-        // there is no need to pre-filter here.
         final candidate = RrInterval(
           intervalMs: rr.round(),
           timestamp: timestamp,
           isArtifact: false,
         );
-        _rrController.add(_acceptance.evaluate(candidate));
+
+        // De-halving (spec note 30) runs before the acceptance gate, and
+        // every trusted candidate is fed to it unconditionally — its
+        // pending/pair state depends on seeing every beat in order, so a
+        // dropped feed would corrupt the next merge decision. It buffers
+        // internally, so a given feed may resolve no output (`null`, held
+        // pending a partner), exactly one, or occasionally an extra
+        // previously-buffered interval — do not assume 1:1 parity with
+        // `newIntervals`.
+        final dehalved = _dehalving.evaluate(candidate);
+        if (dehalved == null) continue;
+
+        // Only the terminal emit needs the closed-controller guard — a
+        // teardown-race tick still feeds the de-halving stage above (so its
+        // state stays correct for whatever measurement follows) but must
+        // not add to a closed controller.
+        if (_rrController.isClosed) continue;
+
+        // Every de-halved interval is fed through [_acceptance], artifact or
+        // not — its own history-append logic already skips artifacts, so
+        // there is no need to pre-filter here.
+        _rrController.add(_acceptance.evaluate(dehalved));
       }
     }
 
