@@ -1,8 +1,11 @@
 import 'package:camera_ppg_kit/camera_ppg_kit.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+// `flutter_riverpod` exports its own `AsyncError`, colliding with the widget
+// kit's `AsyncError` (async_states.dart) — hide riverpod's so the kit's wins.
+import 'package:flutter_riverpod/flutter_riverpod.dart' hide AsyncError;
 
 import '../providers/stream_providers.dart';
+import '../widgets/widgets.dart';
 
 /// Streams screen — dogfoods the kit's **public barrel only** (spec note
 /// 14).
@@ -54,58 +57,109 @@ class _StreamsScreenState extends ConsumerState<StreamsScreen> {
 
     final stateAsync = ref.watch(stateProvider);
     final state = stateAsync.value ?? MeasurementState.idle;
+    final (label, color) = _stateLabelColor(state);
 
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _stateBanner(state),
+          StateBanner(label, color),
           const SizedBox(height: 16),
-          _qualityAndPresenceRow(),
+          _bpmCard(),
           const SizedBox(height: 16),
-          _bpmSection(),
+          _rrCard(),
           const SizedBox(height: 16),
-          _rrSection(),
+          _signalCard(),
         ],
       ),
     );
   }
 
-  Widget _stateBanner(MeasurementState state) {
-    final (label, color) = switch (state) {
-      MeasurementState.idle => ('Idle', Colors.grey),
-      MeasurementState.warmup => ('Hold still… warming up', Colors.blue),
-      MeasurementState.measuring => ('Measuring', Colors.green),
-      MeasurementState.poorSignal => ('Poor signal — check finger placement', Colors.orange),
-    };
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color),
+  /// Maps [MeasurementState] onto its banner label + semantic color. Only
+  /// the four current enum values — no `done`/"Complete" arm is reintroduced
+  /// (note 23).
+  ///
+  /// `poorSignal → fairColor` (orange) is intentional: `poorColor` (red) is
+  /// reserved for error states, so a later edit should not "correct" this to
+  /// `poorColor`.
+  (String, Color) _stateLabelColor(MeasurementState state) => switch (state) {
+        MeasurementState.idle => ('Idle', idleColor),
+        MeasurementState.warmup => ('Hold still… warming up', pendingColor),
+        MeasurementState.measuring => ('Measuring', goodColor),
+        MeasurementState.poorSignal => ('Poor signal — check finger placement', fairColor),
+      };
+
+  /// Headline metric — the biggest, most prominent number on the screen.
+  Widget _bpmCard() {
+    final bpm = ref.watch(bpmProvider);
+    return SectionCard(
+      title: 'BPM',
+      child: Center(
+        child: Column(
+          children: [
+            Text(
+              bpm?.toString() ?? '—',
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 56, fontWeight: FontWeight.bold),
+            ),
+            const Text('derived, display-only', style: TextStyle(fontSize: 12, color: Colors.grey)),
+          ],
+        ),
       ),
-      child: Text(
-        label,
-        style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 16),
-        textAlign: TextAlign.center,
+    );
+  }
+
+  /// Latest RR interval plus the rolling per-beat history. Artifacts are
+  /// flagged (color, an asterisk) rather than filtered out — a developer
+  /// wants to see rejected beats (spec note 14).
+  ///
+  /// `rrProvider` is a `StreamProvider` that sits in the `loading` state
+  /// (not a null-data state) until its first emit, so the latest-interval
+  /// line is gated on the `AsyncValue` itself, mirroring `_signalCard` in
+  /// `source_screen.dart`.
+  Widget _rrCard() {
+    final rrAsync = ref.watch(rrProvider);
+
+    return SectionCard(
+      title: 'Live RR',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          rrAsync.when(
+            data: (rr) => Text(
+              'Latest: ${rr.intervalMs} ms${rr.isArtifact ? ' (artifact)' : ''}',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            loading: () => const AsyncEmpty('waiting for signal…'),
+            error: (error, _) => AsyncError(error),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final rr in _rrHistory)
+                StatusChip('${rr.intervalMs}${rr.isArtifact ? '*' : ''}', rr.isArtifact ? poorColor : goodColor),
+            ],
+          ),
+        ],
       ),
     );
   }
 
   /// Own copy of the status display (Scope notes) — the Source screen keeps
   /// an identical copy; deliberately not factored into a shared widget.
-  Widget _qualityAndPresenceRow() {
-    final quality = ref.watch(qualityProvider).value;
+  ///
+  /// `qualityProvider` is a `StreamProvider` that sits in the `loading`
+  /// state (not a null-data state) until its first emit, so the SQI chip is
+  /// gated on the `AsyncValue` itself: `loading` renders `AsyncEmpty`
+  /// ("waiting for signal…"), `data` renders the `StatusChip`, `error`
+  /// renders `AsyncError`. Finger-presence has no live-source ambiguity in
+  /// practice worth a spinner, so it stays a plain `LabelRow` reusing the
+  /// existing `null → 'unknown'` fallback.
+  Widget _signalCard() {
+    final qualityAsync = ref.watch(qualityProvider);
     final presence = ref.watch(fingerPresenceProvider).value;
 
-    final qualityColor = switch (quality) {
-      SignalQuality.good => Colors.green,
-      SignalQuality.fair => Colors.orange,
-      SignalQuality.poor => Colors.red,
-      null => Colors.grey,
-    };
     final presenceLabel = switch (presence) {
       FingerPresence.present => 'finger present',
       FingerPresence.absent => 'no finger',
@@ -113,61 +167,20 @@ class _StreamsScreenState extends ConsumerState<StreamsScreen> {
       null => 'unknown',
     };
 
-    return Row(
-      children: [
-        Chip(
-          label: Text('SQI: ${quality?.name ?? '—'}'),
-          backgroundColor: qualityColor.withValues(alpha: 0.15),
-          labelStyle: TextStyle(color: qualityColor, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(width: 8),
-        Expanded(child: Text(presenceLabel, style: const TextStyle(fontSize: 13))),
-      ],
-    );
-  }
-
-  Widget _bpmSection() {
-    final bpm = ref.watch(bpmProvider);
-    return Center(
+    return SectionCard(
+      title: 'Signal',
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            bpm?.toString() ?? '—',
-            style: const TextStyle(fontSize: 56, fontWeight: FontWeight.bold),
+          qualityAsync.when(
+            data: (quality) => StatusChip('SQI: ${quality.name}', qualityColor(quality)),
+            loading: () => const AsyncEmpty('waiting for signal…'),
+            error: (error, _) => AsyncError(error),
           ),
-          const Text('BPM (derived, display-only)', style: TextStyle(color: Colors.grey)),
+          const SizedBox(height: 8),
+          LabelRow('Finger', presenceLabel),
         ],
       ),
-    );
-  }
-
-  Widget _rrSection() {
-    final latest = ref.watch(rrProvider).value;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Latest RR: ${latest != null ? '${latest.intervalMs} ms${latest.isArtifact ? ' (artifact)' : ''}' : '—'}',
-          style: const TextStyle(fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 4),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final rr in _rrHistory)
-              Chip(
-                label: Text('${rr.intervalMs}${rr.isArtifact ? '*' : ''}'),
-                backgroundColor: rr.isArtifact ? Colors.red.shade50 : Colors.green.shade50,
-                labelStyle: TextStyle(
-                  fontSize: 12,
-                  color: rr.isArtifact ? Colors.red : Colors.green.shade800,
-                ),
-                visualDensity: VisualDensity.compact,
-              ),
-          ],
-        ),
-      ],
     );
   }
 }
