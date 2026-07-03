@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:camera_ppg_kit/camera_ppg_kit.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+// `flutter_riverpod` exports its own `AsyncError`, colliding with the widget
+// kit's `AsyncError` (async_states.dart) — hide riverpod's so the kit's wins.
+import 'package:flutter_riverpod/flutter_riverpod.dart' hide AsyncError;
 
 import '../auto_detect/log.dart';
 import '../calibration/calibration_recorder.dart';
 import '../providers/camera_ppg_service_provider.dart';
 import '../providers/session_config_provider.dart';
 import '../providers/stream_providers.dart';
+import '../widgets/widgets.dart';
 
 /// Calibration branch — a **pure consumer** of the already-flowing RR stream
 /// (spec note 21). The source is owned by the [CameraPpgService] singleton
@@ -116,7 +119,9 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _countdown(),
+          _stateBanner(),
+          const SizedBox(height: 16),
+          _countdownCard(),
           const SizedBox(height: 16),
           _recordButtonsRow(),
           if (_blockedByNotMeasuring) ...[
@@ -126,23 +131,52 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
           const SizedBox(height: 16),
           _bpmSection(),
           const SizedBox(height: 16),
-          _qualityAndStateRow(),
+          _signalCard(),
           const SizedBox(height: 16),
-          _countedBeatsField(),
-          const SizedBox(height: 16),
-          _saveSection(),
+          _saveCard(),
         ],
       ),
     );
   }
 
-  Widget _countdown() {
+  /// Wrapped in its own [Consumer] for the same isolation reason as
+  /// [_bpmSection]: `stateProvider` emits at frame cadence, so watching it in
+  /// a leaf keeps that rebuild off the countdown/buttons (note 21).
+  Widget _stateBanner() {
+    return Consumer(
+      builder: (context, ref, _) {
+        final stateAsync = ref.watch(stateProvider);
+        final state = stateAsync.value ?? MeasurementState.idle;
+        final (label, color) = _stateLabelColor(state);
+        return StateBanner(label, color);
+      },
+    );
+  }
+
+  /// Maps [MeasurementState] onto its banner label + semantic color — copied
+  /// from `streams_screen.dart:_stateLabelColor`. Only the four current enum
+  /// values — no `done`/"Complete" arm is reintroduced (note 23).
+  ///
+  /// `poorSignal → fairColor` (orange) is intentional: `poorColor` (red) is
+  /// reserved for error states, so a later edit should not "correct" this to
+  /// `poorColor`.
+  (String, Color) _stateLabelColor(MeasurementState state) => switch (state) {
+        MeasurementState.idle => ('Idle', idleColor),
+        MeasurementState.warmup => ('Hold still… warming up', pendingColor),
+        MeasurementState.measuring => ('Measuring', goodColor),
+        MeasurementState.poorSignal => ('Poor signal — check finger placement', fairColor),
+      };
+
+  Widget _countdownCard() {
     final m = (_remainingSeconds ~/ 60).toString().padLeft(1, '0');
     final s = (_remainingSeconds % 60).toString().padLeft(2, '0');
-    return Center(
-      child: Text(
-        '$m:$s',
-        style: const TextStyle(fontSize: 64, fontWeight: FontWeight.bold),
+    return SectionCard(
+      title: 'Countdown',
+      child: Center(
+        child: Text(
+          '$m:$s',
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 64, fontWeight: FontWeight.bold),
+        ),
       ),
     );
   }
@@ -168,19 +202,7 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   }
 
   Widget _guidanceBanner() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.orange.shade50,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.orange),
-      ),
-      child: const Text(
-        'Start measurement on the Source screen first',
-        style: TextStyle(color: Colors.orange, fontWeight: FontWeight.bold),
-      ),
-    );
+    return const StateBanner('Start measurement on the Source screen first', fairColor);
   }
 
   /// Wrapped in its own [Consumer] rather than reading `ref.watch` straight
@@ -189,96 +211,77 @@ class _CalibrationScreenState extends ConsumerState<CalibrationScreen> {
   /// `ref.watch` sitting in a helper method invoked from `build()` registers
   /// the *whole* screen element as its dependent — rebuilding the countdown
   /// and buttons alongside it. Isolating the watch in a `Consumer` confines
-  /// the frame-rate rebuild to this leaf, leaving `_countdown()` driven only
-  /// by the 1 Hz `_tickTimer`, per note 21.
+  /// the frame-rate rebuild to this leaf, leaving `_countdownCard()` driven
+  /// only by the 1 Hz `_tickTimer`, per note 21.
   Widget _bpmSection() {
     return Consumer(
       builder: (context, ref, _) {
         final bpm = ref.watch(bpmProvider);
-        return Center(
-          child: Column(
-            children: [
-              Text(
-                bpm?.toString() ?? '—',
-                style: const TextStyle(fontSize: 56, fontWeight: FontWeight.bold),
-              ),
-              const Text('BPM (display-only)', style: TextStyle(color: Colors.grey)),
-            ],
+        return SectionCard(
+          title: 'BPM',
+          child: Center(
+            child: Column(
+              children: [
+                Text(
+                  bpm?.toString() ?? '—',
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 56, fontWeight: FontWeight.bold),
+                ),
+                const Text('derived, display-only', style: TextStyle(fontSize: 12, color: Colors.grey)),
+              ],
+            ),
           ),
         );
       },
     );
   }
 
-  /// Own copy of the status display (Scope notes) — Source/Kit-API keep
+  /// Own copy of the status display (Scope notes) — Source/Streams keep
   /// identical copies; deliberately not factored into a shared widget.
   ///
   /// Wrapped in its own [Consumer] for the same reason as [_bpmSection]:
   /// `qualityProvider` also emits every processed frame, so isolating the
   /// watch here keeps that frame-rate rebuild off the countdown/buttons.
-  Widget _qualityAndStateRow() {
+  Widget _signalCard() {
     return Consumer(
       builder: (context, ref, _) {
-        final quality = ref.watch(qualityProvider).value;
-        final stateAsync = ref.watch(stateProvider);
-        final state = stateAsync.value ?? MeasurementState.idle;
-
-        final qualityColor = switch (quality) {
-          SignalQuality.good => Colors.green,
-          SignalQuality.fair => Colors.orange,
-          SignalQuality.poor => Colors.red,
-          null => Colors.grey,
-        };
-        final (stateLabel, stateColor) = switch (state) {
-          MeasurementState.idle => ('Idle', Colors.grey),
-          MeasurementState.warmup => ('Warming up', Colors.blue),
-          MeasurementState.measuring => ('Measuring', Colors.green),
-          MeasurementState.poorSignal => ('Poor signal', Colors.orange),
-        };
-
-        return Row(
-          children: [
-            Chip(
-              label: Text('SQI: ${quality?.name ?? '—'}'),
-              backgroundColor: qualityColor.withValues(alpha: 0.15),
-              labelStyle: TextStyle(color: qualityColor, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(width: 8),
-            Chip(
-              label: Text(stateLabel),
-              backgroundColor: stateColor.withValues(alpha: 0.15),
-              labelStyle: TextStyle(color: stateColor, fontWeight: FontWeight.bold),
-            ),
-          ],
+        final qualityAsync = ref.watch(qualityProvider);
+        return SectionCard(
+          title: 'Signal',
+          child: qualityAsync.when(
+            data: (quality) => StatusChip('SQI: ${quality.name}', qualityColor(quality)),
+            loading: () => const AsyncEmpty('waiting for signal…'),
+            error: (error, _) => AsyncError(error),
+          ),
         );
       },
     );
   }
 
-  Widget _countedBeatsField() {
-    return TextField(
-      controller: _beatsController,
-      keyboardType: TextInputType.number,
-      decoration: const InputDecoration(
-        labelText: 'Counted beats (optional)',
-        border: OutlineInputBorder(),
-      ),
-    );
-  }
-
-  Widget _saveSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ElevatedButton(
-          onPressed: _recorded ? _save : null,
-          child: const Text('Save'),
-        ),
-        if (_savedPath != null) ...[
-          const SizedBox(height: 12),
-          SelectableText(_savedPath!),
+  Widget _saveCard() {
+    return SectionCard(
+      title: 'Save',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _beatsController,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'Counted beats (optional)',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: _recorded ? _save : null,
+            child: const Text('Save'),
+          ),
+          if (_savedPath != null) ...[
+            const SizedBox(height: 12),
+            SelectableText(_savedPath!),
+          ],
         ],
-      ],
+      ),
     );
   }
 }
