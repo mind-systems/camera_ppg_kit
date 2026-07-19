@@ -1,7 +1,3 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## What this repository is
 
 `camera_ppg_kit` is a **Flutter plugin** that turns the phone's rear camera + flash (torch) into a contact-PPG heart-rate source: a fingertip over the lens and LED, and the kit emits a stream of **RR intervals** (ms) plus a signal-quality assessment. BPM/HRV are left to the consumer.
