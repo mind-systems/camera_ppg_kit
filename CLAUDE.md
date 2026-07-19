@@ -60,7 +60,3 @@ flutter pub add <package>   # never hand-edit pubspec.yaml
 | [docs/signal-processing.md](docs/signal-processing.md) | De-halving, acceptance gate, session policy |
 | [docs/device-support.md](docs/device-support.md) | Per-device hardware notes, tested devices, calibration |
 | [.ai-factory/ARCHITECTURE.md](.ai-factory/ARCHITECTURE.md) | Module structure, layers, dependency rules |
-
-## Language
-
-All files in this repo are written in English, regardless of conversation language.

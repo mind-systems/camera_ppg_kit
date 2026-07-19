@@ -2,22 +2,9 @@
 
 > Auto-detected conventions from the Flutter-plugin scaffold and the `neiry_kit` sibling. Edit as needed.
 
-## Naming Conventions
-
-- Files: `snake_case.dart` (Dart/Flutter convention; e.g. `rr_interval.dart`, `device_locator.dart`).
-- Classes / enums: `PascalCase`.
-- Variables / functions / parameters: `lowerCamelCase`.
-- Constants: `lowerCamelCase` (Dart `const`), not SCREAMING_CASE.
-- Native: Kotlin under `com.mind.camera_ppg_kit`; Swift plugin class `CameraPpgKitPlugin`.
-
 ## Module Structure
 
 - Public API surface is the `lib/camera_ppg_kit.dart` barrel — re-export from `lib/src/` only; never let consumers import `src/` directly.
-- `lib/src/api/` — high-level Dart API the host calls.
-- `lib/src/models/` — value types crossing the API boundary.
-- `lib/src/channel/` — method/event-channel names and shared enums.
-- `lib/src/processing/` — Dart-side signal/acceptance logic layered on `flutter_ppg`.
-- `lib/src/util/` — internal helpers (logging).
 - The kit must not import from `mind_mobile`; it depends only on `flutter`, `plugin_platform_interface`, `flutter_ppg`, and `camera`.
 
 ## Error Handling
