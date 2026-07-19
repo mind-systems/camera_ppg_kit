@@ -1,11 +1,10 @@
-# Project base rules
+# Project Rules
 
-> Auto-detected conventions from the Flutter-plugin scaffold and the `neiry_kit` sibling. Edit as needed.
+> Short, actionable rules and conventions for this project. Loaded automatically by /aif-implement.
 
 ## Module Structure
 
-- Public API surface is the `lib/camera_ppg_kit.dart` barrel — re-export from `lib/src/` only; never let consumers import `src/` directly.
-- The kit must not import from `mind_mobile`; it depends only on `flutter`, `plugin_platform_interface`, `flutter_ppg`, and `camera`.
+- The kit must not import from `mind_mobile`; it depends only on `flutter`, `plugin_platform_interface`, `flutter_ppg`, `camera`, and `sensors_plus`.
 
 ## Error Handling
 
@@ -18,6 +17,5 @@
 
 ## Dependencies
 
-- Add packages only via `flutter pub add` — never hand-edit `pubspec.yaml`.
 - Invoke Flutter as `/usr/local/bin/flutter` from automation.
 - This kit owns no `.proto`/wire contract; do not add gRPC here.

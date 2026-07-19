@@ -4,9 +4,9 @@ import 'dart:developer';
 ///
 /// Mirrors `neiry_kit`'s `lib/src/util/nlog.dart` — the single internal
 /// logging entry point every `lib/` file in this kit must route through.
-/// Never use `print`/`debugPrint` directly (CLAUDE.md "Logging"): keeping
-/// all logs behind one helper means the host app's own logging policy is
-/// not violated when the kit is embedded. Not exported from the barrel.
+/// Never use `print`/`debugPrint` directly: keeping all logs behind one
+/// helper means the host app's own logging policy is not violated when
+/// the kit is embedded. Not exported from the barrel.
 void nlog(
   String message, {
   String name = 'camera_ppg_kit',
